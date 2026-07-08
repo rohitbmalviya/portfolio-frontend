@@ -161,6 +161,40 @@ export type UpdateSettingsPayload = Partial<
   Omit<SiteSettings, 'id' | 'createdAt' | 'updatedAt' | 'resumeUrl' | 'ogImage' | 'resumeMediaId' | 'ogImageMediaId'>
 >;
 
+// ── Auth token storage ────────────────────────────────────────
+// The backend sets an httpOnly cookie AND returns the access token in the
+// login body. In production the frontend (Vercel) and API (Render) are on
+// different sites, and many browsers block third-party cookies outright
+// (Safari, Chrome Incognito/tracking-protection) — so the cookie alone is
+// not reliable. We therefore also store the token and send it as an
+// Authorization: Bearer header, which the backend's JwtStrategy accepts.
+
+const TOKEN_KEY = 'admin_access_token';
+
+function getStoredToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // storage unavailable (private mode quota etc.) — cookie path still works
+  }
+}
+
+function authHeader(): Record<string, string> {
+  const token = getStoredToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // ── Low-level fetch ───────────────────────────────────────────
 
 // All backend responses are wrapped: { data: T }
@@ -177,12 +211,14 @@ async function adminFetch<T>(
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      ...authHeader(),
       ...(options.headers ?? {}),
     },
   });
 
   if (res.status === 401) {
-    // Redirect to login — safe to call from client components
+    // Clear any stale token, then redirect to login
+    storeToken(null);
     if (typeof window !== 'undefined') {
       window.location.href = '/admin/login';
     }
@@ -213,10 +249,12 @@ async function adminUpload<T>(path: string, formData: FormData): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     credentials: 'include',
+    headers: { ...authHeader() },
     body: formData,
   });
 
   if (res.status === 401) {
+    storeToken(null);
     if (typeof window !== 'undefined') {
       window.location.href = '/admin/login';
     }
@@ -242,16 +280,26 @@ async function adminUpload<T>(path: string, formData: FormData): Promise<T> {
 // ── Auth ──────────────────────────────────────────────────────
 
 export const adminAuth = {
-  login: (payload: LoginPayload) =>
-    adminFetch<LoginResponse>('/api/auth/login', {
+  login: async (payload: LoginPayload) => {
+    const res = await adminFetch<LoginResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
-    }),
+    });
+    // Keep the token for Bearer auth — the httpOnly cookie alone is
+    // unreliable cross-site (third-party cookie blocking).
+    storeToken(res.accessToken);
+    return res;
+  },
 
   me: () => adminFetch<MeResponse>('/api/auth/me'),
 
-  logout: () =>
-    adminFetch<void>('/api/auth/logout', { method: 'POST' }),
+  logout: async () => {
+    try {
+      await adminFetch<void>('/api/auth/logout', { method: 'POST' });
+    } finally {
+      storeToken(null);
+    }
+  },
 };
 
 // ── Pages ─────────────────────────────────────────────────────
