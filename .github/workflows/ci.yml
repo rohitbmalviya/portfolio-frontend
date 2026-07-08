@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────
+#  CI — portfolio-frontend
+#  Runs on every PR and on pushes to main.
+#  Gates merges via branch protection (require the "ci" check).
+#  Deploys are NOT done here — Vercel auto-deploys via its Git
+#  integration (preview builds on PRs, production on main).
+#
+#  NEXT_PUBLIC_API_URL points at localhost: the API is not
+#  reachable in CI, and the pages are built to degrade gracefully
+#  (empty lists) when fetches fail — so `next build` stays
+#  deterministic without depending on the live backend.
+# ─────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
