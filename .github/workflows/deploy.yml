@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────
+#  Deploy — portfolio-frontend (MANUAL)
+#  Run from GitHub → Actions → "Deploy" → "Run workflow".
+#  Triggers a Vercel Deploy Hook, which builds & deploys the
+#  latest commit on main to PRODUCTION. Auto-deploy of main on
+#  push is disabled via vercel.json (git.deploymentEnabled).
+#  PR preview deployments still work normally.
+#
+#  Setup (once): Vercel → project → Settings → Git →
+#  Deploy Hooks → create hook (name: "manual-prod", branch: main)
+#  → copy the URL → GitHub repo → Settings → Secrets and
+#  variables → Actions → new secret:
+#    VERCEL_DEPLOY_HOOK_URL = <that URL>
+# ─────────────────────────────────────────────────────────────
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Vercel production deploy
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::VERCEL_DEPLOY_HOOK_URL secret is not set"; exit 1
+          fi
+          curl -fsS -X POST "$HOOK"
+          echo "✅ Vercel production deploy triggered — watch progress in the Vercel dashboard."
