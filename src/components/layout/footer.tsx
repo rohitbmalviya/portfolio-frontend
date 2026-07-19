@@ -87,14 +87,16 @@ export function Footer({ navItems, settings }: FooterProps) {
         {/* Copyright */}
         <p className="text-center leading-relaxed">
           {settings?.footerText ?? (
+            <span>
+              © {new Date().getFullYear()} {settings?.name ?? SITE_OWNER}
+            </span>
+          )}
+          {settings?.footerText && (
             <>
-              Designed &amp; built by{' '}
-              <span className="text-[--accent]">{SITE_OWNER}</span>
-              {' — '}Next.js + Tailwind
+              {' · '}
+              <span>© {new Date().getFullYear()}</span>
             </>
           )}
-          {' · '}
-          <span>© {new Date().getFullYear()}</span>
         </p>
       </div>
     </footer>

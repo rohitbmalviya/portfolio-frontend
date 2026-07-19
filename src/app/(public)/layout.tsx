@@ -28,7 +28,7 @@ export default async function PublicLayout({
 
       {/* Content sits above the canvas */}
       <div className="relative z-10">
-        <Nav navItems={navItems} />
+        <Nav navItems={navItems} settings={settings} />
         <main id="main-content" tabIndex={-1}>
           {children}
         </main>

@@ -60,10 +60,3 @@ export function readingTimeLabel(minutes: number | null | undefined): string {
   if (!minutes) return '';
   return `${minutes} min read`;
 }
-
-/** Skill level order for sorting. */
-export const SKILL_LEVEL_ORDER: Record<string, number> = {
-  EXPERT: 0,
-  PROFICIENT: 1,
-  FAMILIAR: 2,
-};

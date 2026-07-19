@@ -1,17 +1,25 @@
 // ============================================================
 //  not-found.tsx — On-brand 404 page. No layout injection
 //  needed — Next.js uses the nearest layout automatically.
+//
+//  Async Server Component: fetches nav pages + site settings
+//  (in parallel, same as (public)/layout.tsx) so Nav/Footer
+//  render with real data instead of their empty fallbacks.
 // ============================================================
 
-import Link from 'next/link';
 import { LinkButton } from '@/components/ui/button';
 import { Nav } from '@/components/layout/nav';
 import { Footer } from '@/components/layout/footer';
+import { getNav, getSiteSettings } from '@/lib/api';
+import { resolveSiteName, siteNameToLogoWords } from '@/lib/site';
 
-export default function NotFound() {
+export default async function NotFound() {
+  const [navItems, settings] = await Promise.all([getNav(), getSiteSettings()]);
+  const logoText = siteNameToLogoWords(resolveSiteName(settings?.name)).join('.');
+
   return (
     <>
-      <Nav />
+      <Nav navItems={navItems} settings={settings} />
       <main
         className="min-h-[70vh] flex flex-col items-center justify-center py-24 text-center"
         id="main-content"
@@ -48,11 +56,11 @@ export default function NotFound() {
 
           {/* Decorative mono line */}
           <p className="font-mono text-[12px] text-[--border] mt-12">
-            rohit.malviya · 404 · page not found
+            {logoText} · 404 · page not found
           </p>
         </div>
       </main>
-      <Footer />
+      <Footer navItems={navItems} settings={settings} />
     </>
   );
 }

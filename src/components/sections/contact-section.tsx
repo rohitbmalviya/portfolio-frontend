@@ -67,7 +67,7 @@ export async function ContactSection({ data, sectionNumber }: ContactSectionProp
   return (
     <section className="py-16" id="contact" aria-labelledby="contact-heading">
       <div className="wrap">
-        <SectionHeading number={sectionNumber} title={data.heading || "Let's build something."} />
+        <SectionHeading number={sectionNumber} title={data.heading || 'Contact'} />
 
         <div className="max-w-[580px] space-y-6">
           {data.blurb && (
@@ -75,7 +75,7 @@ export async function ContactSection({ data, sectionNumber }: ContactSectionProp
           )}
 
           {/* Interactive contact form — only when enabled in the section */}
-          {data.showForm && <ContactForm email={email} />}
+          {data.showForm && <ContactForm />}
 
           {/* Primary email CTA — only rendered when an email address is available */}
           {(email || legacyResumeUrl) && (

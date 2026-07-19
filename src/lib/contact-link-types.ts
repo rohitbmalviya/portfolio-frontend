@@ -1,15 +1,21 @@
 // ============================================================
-//  lib/contact-link-types.ts — Canonical contact link types.
-//  Single source of truth for every recognised link type,
-//  its display label, and its Lucide icon component.
+//  lib/contact-link-types.ts — Frontend-only icon lookup (+
+//  last-resort label) for contact/social link types.
 //
-//  Derived exports:
-//    CONTACT_LINK_TYPE_OPTIONS  — {value, label}[] for <select>
-//    CONTACT_LINK_ICON_MAP      — Record<string, LucideIcon> for rendering
+//  The Configuration key `contact_link_types` in the backend CMS
+//  is the single source of truth for value/label pairs shown in
+//  the admin UI (see section-data-form.tsx, which fetches it via
+//  getConfigOptions). This file intentionally does NOT duplicate
+//  that list — it only maps a type value to a Lucide icon
+//  component (icons can't live in the backend), with `label` kept
+//  as a last-resort display fallback for types the site renders
+//  outside of any admin-driven label (e.g. footer social icons).
+//
+//  Derived export:
+//    CONTACT_LINK_ICON_MAP — Record<string, LucideIcon> for rendering
 //
 //  Consumers:
-//    - components/admin/section-data-form.tsx  (replaces LINK_TYPE_OPTIONS)
-//    - components/sections/contact-section.tsx (replaces LINK_ICONS)
+//    - components/sections/contact-section.tsx (icon lookup)
 //    - components/layout/footer.tsx            (social icon lookup)
 // ============================================================
 
@@ -54,13 +60,6 @@ export const CONTACT_LINK_TYPES: ContactLinkType[] = [
   { value: 'telegram',  label: 'Telegram',      icon: Send         },
   { value: 'resume',    label: 'Resume / CV',   icon: FileText     },
 ];
-
-/**
- * Derived: {value, label}[] options array for form <select> elements.
- * Typed as ConfigOption-compatible (matches lib/api ConfigOption shape).
- */
-export const CONTACT_LINK_TYPE_OPTIONS: { value: string; label: string }[] =
-  CONTACT_LINK_TYPES.map(({ value, label }) => ({ value, label }));
 
 /**
  * Derived: icon lookup by type value.

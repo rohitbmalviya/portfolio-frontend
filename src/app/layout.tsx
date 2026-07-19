@@ -7,7 +7,8 @@
 import type { Metadata, Viewport } from 'next';
 import { Space_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
 import { ThemeProvider } from '@/components/ui/theme-provider';
-import { SITE_OWNER, SITE_TITLE, SITE_TITLE_TEMPLATE } from '@/lib/site';
+import { SITE_OWNER, SITE_TITLE, SITE_TITLE_TEMPLATE, SITE_URL } from '@/lib/site';
+import { isSafeCssColor } from '@/lib/color';
 import { getSiteSettings } from '@/lib/api';
 import './globals.css';
 
@@ -34,10 +35,6 @@ const jetbrainsMono = JetBrains_Mono({
   display: 'swap',
 });
 
-// ── Site URL (infra constant — not CMS-driven) ────────────────
-
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://rohitmalviya.dev';
-
 // ── Dynamic metadata (title / description / OG / twitter from CMS) ──
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -55,10 +52,12 @@ export async function generateMetadata(): Promise<Metadata> {
       icon: [
         { url: '/favicon.svg', type: 'image/svg+xml' },
         { url: '/favicon-32.png', sizes: '32x32', type: 'image/png' },
+        { url: '/favicon.ico', sizes: 'any', type: 'image/x-icon' },
       ],
-      shortcut: '/favicon.svg',
+      shortcut: '/favicon.ico',
       apple: '/apple-touch-icon.png',
     },
+    manifest: '/manifest.webmanifest',
     robots: {
       index: true,
       follow: true,
@@ -118,28 +117,68 @@ export const viewport: Viewport = {
 // ── No-flash theme script ─────────────────────────────────────
 
 // This runs synchronously before any CSS/JS loads, so the
-// user never sees the wrong theme on first paint.
-const NO_FLASH_SCRIPT = `(function(){try{var t=localStorage.getItem('theme');if(!t){var def='${process.env.NEXT_PUBLIC_DEFAULT_THEME ?? 'dark'}'.toLowerCase();t=def==='light'?'light':(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');}document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
+// user never sees the wrong theme on first paint. `defaultTheme`
+// is resolved server-side (SiteSettings.defaultTheme → the
+// NEXT_PUBLIC_DEFAULT_THEME env var → 'dark') and baked in as the
+// only default candidate; a user's own localStorage choice still
+// wins whenever one is present.
+function buildNoFlashScript(defaultTheme: 'dark' | 'light'): string {
+  return `(function(){try{var t=localStorage.getItem('theme');if(!t){var def='${defaultTheme}';t=def==='light'?'light':(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');}document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
+}
+
+function resolveDefaultTheme(settingsTheme?: string | null): 'dark' | 'light' {
+  const fromSettings = settingsTheme?.toLowerCase();
+  if (fromSettings === 'light' || fromSettings === 'dark') return fromSettings;
+  const fromEnv = (process.env.NEXT_PUBLIC_DEFAULT_THEME ?? 'dark').toLowerCase();
+  return fromEnv === 'light' ? 'light' : 'dark';
+}
+
+// ── Brand accent override (SiteSettings.brandAccent) ──────────
+
+// brandAccent is admin-editable free text that lands directly inside
+// a <style> tag, so it MUST be strictly whitelisted (hex/rgb/hsl only)
+// before use — anything else is dropped and the CSS defaults apply.
+// Only the accent color and its transparency-derived tokens are
+// overridden; --grad-from/--grad-to are a deliberate two-tone gradient
+// (not a pure function of --accent even today) so they're left alone.
+function buildAccentOverrideCss(accent: string): string {
+  const rule = (selector: string) =>
+    `${selector}{--accent:${accent};--accent-dim:color-mix(in srgb, ${accent} 12%, transparent);--accent-glow:color-mix(in srgb, ${accent} 25%, transparent);--hero-glow:color-mix(in srgb, ${accent} 7%, transparent);}`;
+  return `${rule(':root[data-theme="dark"]')}${rule(':root[data-theme="light"]')}`;
+}
 
 // ── Layout ────────────────────────────────────────────────────
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const settings = await getSiteSettings();
+
+  const defaultTheme = resolveDefaultTheme(settings?.defaultTheme);
+  const noFlashScript = buildNoFlashScript(defaultTheme);
+
+  const accentCss =
+    settings?.brandAccent && isSafeCssColor(settings.brandAccent)
+      ? buildAccentOverrideCss(settings.brandAccent.trim())
+      : null;
+
   return (
     <html
       lang="en"
-      data-theme="dark"
+      data-theme={defaultTheme}
       className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
       <head>
         {/* No-flash inline script — MUST be before any stylesheet or React hydration */}
         <script
-          dangerouslySetInnerHTML={{ __html: NO_FLASH_SCRIPT }}
+          dangerouslySetInnerHTML={{ __html: noFlashScript }}
         />
+        {/* Brand accent override — only emitted when SiteSettings.brandAccent
+            is a valid, whitelisted CSS color; otherwise the CSS defaults apply. */}
+        {accentCss && <style dangerouslySetInnerHTML={{ __html: accentCss }} />}
       </head>
       <body>
         <ThemeProvider>

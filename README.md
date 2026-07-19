@@ -30,33 +30,35 @@ Public portfolio site and private admin CMS built with Next.js 15 App Router, Ty
 ### Route Map
 
 ```
-src/app/
-├── layout.tsx                        # Root layout — fonts, theme, CMS-driven metadata
-├── sitemap.ts                        # Dynamic XML sitemap (projects + blog from API)
-├── not-found.tsx
-├── (public)/
-│   ├── layout.tsx                    # Public layout — Navbar + Footer
-│   ├── page.tsx                      # / — Home: fetches "home" page from CMS
-│   ├── [slug]/
-│   │   ├── page.tsx                  # /:slug — Any admin-created CMS page
-│   │   └── [item]/
-│   │       └── page.tsx              # /:slug/:item — Unified collection detail route
-│   └── error.tsx
-└── admin/
-    ├── layout.tsx                    # Admin shell — sidebar + AdminAuthGuard
-    ├── login/page.tsx
-    ├── page.tsx                      # Dashboard
-    ├── pages/[id]/page.tsx           # Pages & Sections editor
-    ├── projects/[id]/page.tsx
-    ├── blog/[id]/page.tsx
-    ├── skills/page.tsx
-    ├── experience/[id]/page.tsx
-    ├── education/[id]/page.tsx
-    ├── achievements/[id]/page.tsx
-    ├── media/page.tsx                # Media library (view-only)
-    ├── messages/page.tsx             # Contact inbox + unread bell
-    ├── config/page.tsx
-    └── settings/page.tsx
+src/
+├── middleware.ts                     # Gates /admin/* on access_token cookie presence
+└── app/
+    ├── layout.tsx                    # Root layout — fonts, theme, CMS-driven metadata
+    ├── sitemap.ts                    # Dynamic XML sitemap (projects + blog from API)
+    ├── not-found.tsx
+    ├── (public)/
+    │   ├── layout.tsx                # Public layout — Navbar + Footer
+    │   ├── page.tsx                  # / — Home: fetches "home" page from CMS
+    │   ├── [slug]/
+    │   │   ├── page.tsx              # /:slug — Any admin-created CMS page
+    │   │   └── [item]/
+    │   │       └── page.tsx          # /:slug/:item — Unified collection detail route
+    │   └── error.tsx
+    └── admin/
+        ├── layout.tsx                # Admin shell — sidebar + AdminAuthGuard
+        ├── login/page.tsx
+        ├── page.tsx                  # Dashboard
+        ├── pages/[id]/page.tsx       # Pages & Sections editor
+        ├── projects/[id]/page.tsx
+        ├── blog/[id]/page.tsx
+        ├── skills/page.tsx
+        ├── experience/[id]/page.tsx
+        ├── education/[id]/page.tsx
+        ├── achievements/[id]/page.tsx
+        ├── media/page.tsx            # Media library (view-only)
+        ├── messages/page.tsx         # Contact inbox + unread bell
+        ├── config/page.tsx
+        └── settings/page.tsx
 ```
 
 ### Public Routing in Detail
@@ -110,7 +112,21 @@ All items are pre-rendered at build time via `generateStaticParams` and revalida
 
 ## Admin CMS
 
-The `/admin` area is a full headless CMS bundled into the same Next.js app. It is client-rendered (all admin pages are `'use client'`) and protected by an `AdminAuthGuard` component that checks for an authenticated session on mount. Authentication is handled entirely by the NestJS backend via an httpOnly `access_token` cookie — the frontend never issues or stores its own session.
+The `/admin` area is a full headless CMS bundled into the same Next.js app. It is client-rendered (all admin pages are `'use client'`) and protected by an `AdminAuthGuard` component that checks for an authenticated session on mount. Authentication is handled entirely by the NestJS backend via httpOnly cookies — the frontend never issues or stores its own session.
+
+### Admin auth & the `/backend-api` proxy
+
+In production the frontend (Vercel) and backend (Render) live on different origins, and browsers routinely block third-party cookies (Safari, Chrome tracking-protection, etc.). To keep auth cookie-based without falling back to client-side token storage, all admin API calls (`lib/admin-api.ts`) go through a same-origin rewrite instead of hitting the backend directly:
+
+```
+/backend-api/:path*  →  ${NEXT_PUBLIC_API_URL}/api/:path*   (next.config.ts → rewrites())
+```
+
+Because Next.js rewrites proxy the request server-side, the backend's `Set-Cookie` response (`access_token`, `refresh_token` — both httpOnly) lands first-party on the frontend's own domain, so `credentials: 'include'` alone is enough for every subsequent request. There is no `admin_access_token` in `localStorage` and no `Authorization` header.
+
+- On a `401`, `adminFetch`/`adminUpload` transparently POST `/backend-api/auth/refresh` once (cookie-based) and retry the original call; concurrent 401s share a single in-flight refresh so there's no request stampede. If refresh fails, the user is redirected to `/admin/login`.
+- `src/middleware.ts` gates `/admin/*` (except `/admin/login`) on the mere *presence* of the `access_token` cookie, redirecting to `/admin/login` if it's missing. This is a cheap presence check, not JWT verification — the client-side `AdminAuthGuard` (calls `GET /api/auth/me`) and the backend's own JWT validation remain the real enforcement.
+- Public reads (`lib/api.ts`) are server-side ISR fetches straight to `NEXT_PUBLIC_API_URL` and need no cookies, so they bypass the proxy entirely.
 
 ### Admin Sidebar Navigation
 
@@ -145,6 +161,7 @@ Errors are returned as human-readable strings and surfaced as warning toasts wit
 
 ```
 src/
+├── middleware.ts               # Gates /admin/* on access_token cookie presence
 ├── app/
 │   ├── (public)/              # Public-facing pages
 │   └── admin/                 # Admin CMS pages
@@ -156,8 +173,8 @@ src/
 │   ├── layout/                # Navbar, Footer, ParticlesBackground
 │   └── ui/                    # Shared primitives: Button, Tag, SkillIcon, ThemeToggle, ThemeProvider, SectionHeading, SectionCta, ErrorState
 └── lib/
-    ├── api.ts                 # Typed ISR fetch client for all public API reads
-    ├── admin-api.ts           # Authenticated admin API client (credentials: 'include')
+    ├── api.ts                 # Typed ISR fetch client for all public API reads (server-side, direct to backend)
+    ├── admin-api.ts           # Authenticated admin API client — same-origin via /backend-api proxy, cookie-only auth
     ├── types.ts               # TypeScript mirror of the backend Prisma schema
     ├── seo.ts                 # buildPageMetadata — shared CMS-driven metadata builder
     ├── media-save.ts          # Deferred upload reconcile helpers
@@ -195,14 +212,14 @@ cp .env.example .env.local
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `NEXT_PUBLIC_API_URL` | Yes | `http://localhost:4000` | Base URL of the NestJS backend. Used server-side by `lib/api.ts` (public reads) and by the `/backend-api/*` rewrite proxy that admin writes go through |
 | `NEXT_PUBLIC_SITE_URL` | Yes | `http://localhost:3000` | Canonical public URL (used in sitemap and OG metadata) |
-| `NEXT_PUBLIC_API_URL` | Yes | `http://localhost:4000` | Base URL of the NestJS backend (browser-exposed) |
-| `NEXT_PUBLIC_CONTACT_EMAIL` | No | — | Email address opened by `mailto:` contact links |
-| `NEXT_PUBLIC_DEFAULT_THEME` | No | `dark` | First-visit theme: `dark` or `light` (OS preference and user toggle still apply) |
 | `NEXT_PUBLIC_SITE_OWNER` | No | `Rohit Malviya` | Owner name used in page titles and metadata |
-| `API_URL` | No | `http://localhost:4000` | Server-only backend URL for Route Handlers and Server Components (not browser-exposed) |
+| `NEXT_PUBLIC_DEFAULT_THEME` | No | `dark` | First-visit theme: `dark` or `light` (OS preference and user toggle still apply) |
 
-> Auth is handled entirely by the NestJS backend (httpOnly cookie + JWT strategy). The frontend does not sign its own session.
+This is the complete set of env vars the code reads — nothing else is used.
+
+> Auth is handled entirely by the NestJS backend (httpOnly `access_token` / `refresh_token` cookies + JWT strategy). The frontend does not sign or store its own session — see "Admin auth & the `/backend-api` proxy" below.
 
 ### Run the development server
 

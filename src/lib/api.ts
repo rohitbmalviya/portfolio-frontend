@@ -227,12 +227,16 @@ export async function getConfigOptions(key: string): Promise<ConfigOption[]> {
  * Uses a plain fetch (not apiFetch) because this is a client-side
  * mutation, not an ISR-cached read. Returns true on success,
  * false on any network or HTTP error.
+ *
+ * `website` is an optional honeypot field — always sent empty by the
+ * real form; the backend silently drops submissions where it's non-empty.
  */
 export async function submitContact(payload: {
   name: string;
   email: string;
   subject?: string;
   message: string;
+  website?: string;
 }): Promise<boolean> {
   try {
     const res = await fetch(`${BASE_URL}/api/contact`, {

@@ -1,8 +1,20 @@
 // ============================================================
 //  lib/admin-api.ts — Authenticated admin API client
-//  All calls send credentials:'include' so the httpOnly
-//  access_token cookie is forwarded automatically.
-//  On 401, redirects to /admin/login (client-side).
+//
+//  All admin calls go through the same-origin `/backend-api/*`
+//  proxy (see next.config.ts `rewrites()`), which forwards to the
+//  real backend `/api/*`. Because the request is proxied server-side
+//  by Next.js, the backend's Set-Cookie responses (access_token,
+//  refresh_token — both httpOnly) land first-party on the frontend's
+//  own domain, so `credentials: 'include'` is enough — no client-side
+//  token storage is needed even though the deployed frontend (Vercel)
+//  and backend (Render) are cross-origin.
+//
+//  On a 401, we attempt a single silent refresh (POST .../auth/refresh,
+//  cookie-based) and retry the original request once. If the refresh
+//  fails, or the retry still 401s, we redirect to /admin/login.
+//  Concurrent 401s share one in-flight refresh promise so we never
+//  fire multiple refresh requests at once.
 //
 //  Response envelope: every backend endpoint returns { data: T }.
 //  adminFetch / adminUpload unwrap the envelope and return T.
@@ -29,7 +41,10 @@ import type {
   ContactThread,
 } from './types';
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+// Relative + same-origin so the browser sends first-party cookies.
+// All admin calls happen client-side, so a relative path is safe here
+// (unlike lib/api.ts, which runs server-side and needs an absolute URL).
+const BASE = '/backend-api';
 
 // ── Media (from backend schema) ───────────────────────────────
 
@@ -161,40 +176,6 @@ export type UpdateSettingsPayload = Partial<
   Omit<SiteSettings, 'id' | 'createdAt' | 'updatedAt' | 'resumeUrl' | 'ogImage' | 'resumeMediaId' | 'ogImageMediaId'>
 >;
 
-// ── Auth token storage ────────────────────────────────────────
-// The backend sets an httpOnly cookie AND returns the access token in the
-// login body. In production the frontend (Vercel) and API (Render) are on
-// different sites, and many browsers block third-party cookies outright
-// (Safari, Chrome Incognito/tracking-protection) — so the cookie alone is
-// not reliable. We therefore also store the token and send it as an
-// Authorization: Bearer header, which the backend's JwtStrategy accepts.
-
-const TOKEN_KEY = 'admin_access_token';
-
-function getStoredToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function storeToken(token: string | null): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (token) window.localStorage.setItem(TOKEN_KEY, token);
-    else window.localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // storage unavailable (private mode quota etc.) — cookie path still works
-  }
-}
-
-function authHeader(): Record<string, string> {
-  const token = getStoredToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 // ── Low-level fetch ───────────────────────────────────────────
 
 // All backend responses are wrapped: { data: T }
@@ -202,38 +183,79 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
+/** Paths that must never trigger (or be retried by) the refresh flow. */
+const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/logout'];
+
+function shouldAttemptRefresh(path: string): boolean {
+  return !NO_REFRESH_PATHS.some((p) => path.startsWith(p));
+}
+
+// Shared in-flight refresh promise so concurrent 401s only trigger one
+// POST /backend-api/auth/refresh, not a stampede of duplicate requests.
+let refreshPromise: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = fetch(`${BASE}/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+function redirectToLogin(): void {
+  if (typeof window !== 'undefined') {
+    window.location.href = '/admin/login';
+  }
+}
+
+async function parseErrorMessage(res: Response): Promise<string> {
+  let message = `HTTP ${res.status}`;
+  try {
+    const body = (await res.json()) as { message?: string };
+    message = body?.message ?? message;
+  } catch {
+    // ignore parse error
+  }
+  return message;
+}
+
 async function adminFetch<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-      ...(options.headers ?? {}),
-    },
-  });
+  const doFetch = () =>
+    fetch(`${BASE}${path}`, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers ?? {}),
+      },
+    });
+
+  let res = await doFetch();
+
+  if (res.status === 401 && shouldAttemptRefresh(path)) {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      res = await doFetch();
+    }
+  }
 
   if (res.status === 401) {
-    // Clear any stale token, then redirect to login
-    storeToken(null);
-    if (typeof window !== 'undefined') {
-      window.location.href = '/admin/login';
-    }
+    redirectToLogin();
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
-    let message = `HTTP ${res.status}`;
-    try {
-      const body = await res.json() as { message?: string };
-      message = body?.message ?? message;
-    } catch {
-      // ignore parse error
-    }
-    throw new Error(message);
+    throw new Error(await parseErrorMessage(res));
   }
 
   // 204 No Content — no body to parse
@@ -246,30 +268,29 @@ async function adminFetch<T>(
 
 // Multipart upload (no Content-Type — browser sets boundary)
 async function adminUpload<T>(path: string, formData: FormData): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { ...authHeader() },
-    body: formData,
-  });
+  const doUpload = () =>
+    fetch(`${BASE}${path}`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+
+  let res = await doUpload();
+
+  if (res.status === 401 && shouldAttemptRefresh(path)) {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      res = await doUpload();
+    }
+  }
 
   if (res.status === 401) {
-    storeToken(null);
-    if (typeof window !== 'undefined') {
-      window.location.href = '/admin/login';
-    }
+    redirectToLogin();
     throw new Error('Unauthorized');
   }
 
   if (!res.ok) {
-    let message = `HTTP ${res.status}`;
-    try {
-      const body = await res.json() as { message?: string };
-      message = body?.message ?? message;
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    throw new Error(await parseErrorMessage(res));
   }
 
   // Unwrap { data: T } envelope
@@ -280,26 +301,18 @@ async function adminUpload<T>(path: string, formData: FormData): Promise<T> {
 // ── Auth ──────────────────────────────────────────────────────
 
 export const adminAuth = {
-  login: async (payload: LoginPayload) => {
-    const res = await adminFetch<LoginResponse>('/api/auth/login', {
+  // The backend still returns tokens in the login response body, but we
+  // ignore them entirely — the httpOnly Set-Cookie response (proxied
+  // same-origin via /backend-api) is the only thing that matters now.
+  login: (payload: LoginPayload) =>
+    adminFetch<LoginResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
-    });
-    // Keep the token for Bearer auth — the httpOnly cookie alone is
-    // unreliable cross-site (third-party cookie blocking).
-    storeToken(res.accessToken);
-    return res;
-  },
+    }),
 
-  me: () => adminFetch<MeResponse>('/api/auth/me'),
+  me: () => adminFetch<MeResponse>('/auth/me'),
 
-  logout: async () => {
-    try {
-      await adminFetch<void>('/api/auth/logout', { method: 'POST' });
-    } finally {
-      storeToken(null);
-    }
-  },
+  logout: () => adminFetch<void>('/auth/logout', { method: 'POST' }),
 };
 
 // ── Pages ─────────────────────────────────────────────────────
@@ -307,144 +320,144 @@ export const adminAuth = {
 export const adminPages = {
   // ?admin=true returns pages with their sections array populated,
   // which lets the list UI show section counts.
-  list: () => adminFetch<Page[]>('/api/pages?admin=true'),
+  list: () => adminFetch<Page[]>('/pages?admin=true'),
 
   // Fetch a single page with all its sections by primary key (ID).
   // Uses the dedicated /id/:id route to avoid conflating IDs with slugs.
   get: (id: string) =>
-    adminFetch<Page>(`/api/pages/id/${id}`),
+    adminFetch<Page>(`/pages/id/${id}`),
 
   getBySlug: (slug: string) =>
-    adminFetch<Page>(`/api/pages/${slug}?admin=true`),
+    adminFetch<Page>(`/pages/${slug}?admin=true`),
 
   create: (payload: CreatePagePayload) =>
-    adminFetch<Page>('/api/pages', {
+    adminFetch<Page>('/pages', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdatePagePayload) =>
-    adminFetch<Page>(`/api/pages/${id}`, {
+    adminFetch<Page>(`/pages/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/pages/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/pages/${id}`, { method: 'DELETE' }),
 };
 
 // ── Sections ──────────────────────────────────────────────────
 
 export const adminSections = {
   create: (payload: CreateSectionPayload) =>
-    adminFetch<Section>('/api/sections', {
+    adminFetch<Section>('/sections', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateSectionPayload) =>
-    adminFetch<Section>(`/api/sections/${id}`, {
+    adminFetch<Section>(`/sections/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/sections/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/sections/${id}`, { method: 'DELETE' }),
 
   reorder: (sections: ReorderItem[]) =>
-    adminFetch<void>('/api/sections/reorder', {
+    adminFetch<void>('/sections/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ sections }),
     }),
 
   toggle: (id: string) =>
-    adminFetch<Section>(`/api/sections/${id}/toggle`, { method: 'PATCH' }),
+    adminFetch<Section>(`/sections/${id}/toggle`, { method: 'PATCH' }),
 };
 
 // ── Projects ──────────────────────────────────────────────────
 
 export const adminProjects = {
-  list: () => adminFetch<Project[]>('/api/projects?admin=true'),
+  list: () => adminFetch<Project[]>('/projects?admin=true'),
 
-  get: (id: string) => adminFetch<Project>(`/api/projects/id/${id}`),
+  get: (id: string) => adminFetch<Project>(`/projects/id/${id}`),
 
   create: (payload: CreateProjectPayload) =>
-    adminFetch<Project>('/api/projects', {
+    adminFetch<Project>('/projects', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateProjectPayload) =>
-    adminFetch<Project>(`/api/projects/${id}`, {
+    adminFetch<Project>(`/projects/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/projects/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/projects/${id}`, { method: 'DELETE' }),
 
   reorder: (items: ReorderItem[]) =>
-    adminFetch<void>('/api/projects/reorder', {
+    adminFetch<void>('/projects/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ projects: items }),
     }),
 
   toggleFeatured: (id: string) =>
-    adminFetch<Project>(`/api/projects/${id}/feature`, { method: 'PATCH' }),
+    adminFetch<Project>(`/projects/${id}/feature`, { method: 'PATCH' }),
 
   togglePublished: (id: string) =>
-    adminFetch<Project>(`/api/projects/${id}/publish`, { method: 'PATCH' }),
+    adminFetch<Project>(`/projects/${id}/publish`, { method: 'PATCH' }),
 };
 
 // ── Blog ──────────────────────────────────────────────────────
 
 export const adminBlog = {
-  list: () => adminFetch<BlogPost[]>('/api/blog?admin=true'),
+  list: () => adminFetch<BlogPost[]>('/blog?admin=true'),
 
-  get: (id: string) => adminFetch<BlogPost>(`/api/blog/id/${id}`),
+  get: (id: string) => adminFetch<BlogPost>(`/blog/id/${id}`),
 
   create: (payload: CreateBlogPayload) =>
-    adminFetch<BlogPost>('/api/blog', {
+    adminFetch<BlogPost>('/blog', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateBlogPayload) =>
-    adminFetch<BlogPost>(`/api/blog/${id}`, {
+    adminFetch<BlogPost>(`/blog/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/blog/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/blog/${id}`, { method: 'DELETE' }),
 
   togglePublished: (id: string) =>
-    adminFetch<BlogPost>(`/api/blog/${id}/publish`, { method: 'PATCH' }),
+    adminFetch<BlogPost>(`/blog/${id}/publish`, { method: 'PATCH' }),
 };
 
 // ── Skills ────────────────────────────────────────────────────
 
 export const adminSkills = {
   /** GET /api/skills/grouped — skills pre-grouped in canonical order, empty groups omitted. */
-  listGrouped: () => adminFetch<SkillGroupSection[]>('/api/skills/grouped'),
+  listGrouped: () => adminFetch<SkillGroupSection[]>('/skills/grouped'),
 
   create: (payload: CreateSkillPayload) =>
-    adminFetch<Skill>('/api/skills', {
+    adminFetch<Skill>('/skills', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateSkillPayload) =>
-    adminFetch<Skill>(`/api/skills/${id}`, {
+    adminFetch<Skill>(`/skills/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/skills/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/skills/${id}`, { method: 'DELETE' }),
 
   reorder: (items: ReorderItem[]) =>
-    adminFetch<void>('/api/skills/reorder', {
+    adminFetch<void>('/skills/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ skills: items }),
     }),
@@ -453,27 +466,27 @@ export const adminSkills = {
 // ── Experience ────────────────────────────────────────────────
 
 export const adminExperience = {
-  list: () => adminFetch<Experience[]>('/api/experience'),
+  list: () => adminFetch<Experience[]>('/experience'),
 
-  get: (id: string) => adminFetch<Experience>(`/api/experience/${id}`),
+  get: (id: string) => adminFetch<Experience>(`/experience/${id}`),
 
   create: (payload: CreateExperiencePayload) =>
-    adminFetch<Experience>('/api/experience', {
+    adminFetch<Experience>('/experience', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateExperiencePayload) =>
-    adminFetch<Experience>(`/api/experience/${id}`, {
+    adminFetch<Experience>(`/experience/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/experience/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/experience/${id}`, { method: 'DELETE' }),
 
   reorder: (items: ReorderItem[]) =>
-    adminFetch<void>('/api/experience/reorder', {
+    adminFetch<void>('/experience/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ experience: items }),
     }),
@@ -482,27 +495,27 @@ export const adminExperience = {
 // ── Education ─────────────────────────────────────────────────
 
 export const adminEducation = {
-  list: () => adminFetch<Education[]>('/api/education'),
+  list: () => adminFetch<Education[]>('/education'),
 
-  get: (id: string) => adminFetch<Education>(`/api/education/${id}`),
+  get: (id: string) => adminFetch<Education>(`/education/${id}`),
 
   create: (payload: CreateEducationPayload) =>
-    adminFetch<Education>('/api/education', {
+    adminFetch<Education>('/education', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateEducationPayload) =>
-    adminFetch<Education>(`/api/education/${id}`, {
+    adminFetch<Education>(`/education/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/education/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/education/${id}`, { method: 'DELETE' }),
 
   reorder: (items: ReorderItem[]) =>
-    adminFetch<void>('/api/education/reorder', {
+    adminFetch<void>('/education/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ education: items }),
     }),
@@ -511,27 +524,27 @@ export const adminEducation = {
 // ── Achievements ──────────────────────────────────────────────
 
 export const adminAchievements = {
-  list: () => adminFetch<Achievement[]>('/api/achievements'),
+  list: () => adminFetch<Achievement[]>('/achievements'),
 
-  get: (id: string) => adminFetch<Achievement>(`/api/achievements/${id}`),
+  get: (id: string) => adminFetch<Achievement>(`/achievements/${id}`),
 
   create: (payload: CreateAchievementPayload) =>
-    adminFetch<Achievement>('/api/achievements', {
+    adminFetch<Achievement>('/achievements', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   update: (id: string, payload: UpdateAchievementPayload) =>
-    adminFetch<Achievement>(`/api/achievements/${id}`, {
+    adminFetch<Achievement>(`/achievements/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/achievements/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/achievements/${id}`, { method: 'DELETE' }),
 
   reorder: (items: ReorderItem[]) =>
-    adminFetch<void>('/api/achievements/reorder', {
+    adminFetch<void>('/achievements/reorder', {
       method: 'PATCH',
       body: JSON.stringify({ achievements: items }),
     }),
@@ -540,10 +553,10 @@ export const adminAchievements = {
 // ── Settings ──────────────────────────────────────────────────
 
 export const adminSettings = {
-  get: () => adminFetch<SiteSettings>('/api/settings'),
+  get: () => adminFetch<SiteSettings>('/settings'),
 
   update: (payload: UpdateSettingsPayload) =>
-    adminFetch<SiteSettings>('/api/settings', {
+    adminFetch<SiteSettings>('/settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -552,7 +565,7 @@ export const adminSettings = {
 // ── Media ─────────────────────────────────────────────────────
 
 export const adminMedia = {
-  list: () => adminFetch<MediaRecord[]>('/api/media'),
+  list: () => adminFetch<MediaRecord[]>('/media'),
 
   /** Legacy upload used by the media library (non-deferred). */
   upload: (
@@ -576,17 +589,17 @@ export const adminMedia = {
     if (opts.ownerType) fd.append('ownerType', opts.ownerType);
     if (opts.usage) fd.append('usage', opts.usage);
     if (opts.order !== undefined) fd.append('order', String(opts.order));
-    return adminUpload<MediaRecord>('/api/media', fd);
+    return adminUpload<MediaRecord>('/media', fd);
   },
 
   update: (id: string, payload: { category?: string; alt?: string }) =>
-    adminFetch<MediaRecord>(`/api/media/${id}`, {
+    adminFetch<MediaRecord>(`/media/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
 
   delete: (id: string) =>
-    adminFetch<void>(`/api/media/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/media/${id}`, { method: 'DELETE' }),
 };
 
 // ── Standalone media helpers (used by media-save.ts) ─────────
@@ -626,12 +639,12 @@ export function uploadMedia(
   if (opts.ownerType) fd.append('ownerType', opts.ownerType);
   if (opts.usage) fd.append('usage', opts.usage);
   if (opts.order !== undefined) fd.append('order', String(opts.order));
-  return adminUpload<MediaRecord>('/api/media', fd);
+  return adminUpload<MediaRecord>('/media', fd);
 }
 
 /** Hard-delete a media record from Cloudinary + DB. */
 export function deleteMedia(id: string): Promise<void> {
-  return adminFetch<void>(`/api/media/${id}`, { method: 'DELETE' });
+  return adminFetch<void>(`/media/${id}`, { method: 'DELETE' });
 }
 
 /** PATCH a media record's order, alt, or usage. */
@@ -639,7 +652,7 @@ export function patchMedia(
   id: string,
   payload: { order?: number; alt?: string; usage?: string },
 ): Promise<MediaRecord> {
-  return adminFetch<MediaRecord>(`/api/media/${id}`, {
+  return adminFetch<MediaRecord>(`/media/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
@@ -659,24 +672,24 @@ export interface DashboardCounts {
 }
 
 export const adminStats = {
-  get: () => adminFetch<DashboardCounts>('/api/stats'),
+  get: () => adminFetch<DashboardCounts>('/stats'),
 };
 
 // ── Configuration ─────────────────────────────────────────────
 
 export const adminConfig = {
   /** GET /api/config — list all config sets */
-  list: () => adminFetch<Configuration[]>('/api/config'),
+  list: () => adminFetch<Configuration[]>('/config'),
 
   /** GET /api/config/:key — fetch a single config set by key */
-  get: (key: string) => adminFetch<Configuration>(`/api/config/${key}`),
+  get: (key: string) => adminFetch<Configuration>(`/config/${key}`),
 
   /** PATCH /api/config/:key — upsert items (and optionally label) for a key */
   update: (
     key: string,
     payload: { label?: string; items: ConfigOption[] },
   ) =>
-    adminFetch<Configuration>(`/api/config/${key}`, {
+    adminFetch<Configuration>(`/config/${key}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),
@@ -689,33 +702,33 @@ export type ContactThreadDetail = ContactThread & { messages: ContactMessage[] }
 
 export const adminContact = {
   /** GET /api/contact/threads — list all threads, newest-last-message first. */
-  listThreads: () => adminFetch<ContactThread[]>('/api/contact/threads'),
+  listThreads: () => adminFetch<ContactThread[]>('/contact/threads'),
 
   /** GET /api/contact/unread-count — returns { count } of unread threads. */
-  unreadCount: () => adminFetch<{ count: number }>('/api/contact/unread-count'),
+  unreadCount: () => adminFetch<{ count: number }>('/contact/unread-count'),
 
   /** GET /api/contact/threads/:id — full thread with all messages. */
   getThread: (id: string) =>
-    adminFetch<ContactThreadDetail>(`/api/contact/threads/${id}`),
+    adminFetch<ContactThreadDetail>(`/contact/threads/${id}`),
 
   /** PATCH /api/contact/threads/:id/read — marks thread as read. */
   markRead: (id: string) =>
-    adminFetch<void>(`/api/contact/threads/${id}/read`, { method: 'PATCH' }),
+    adminFetch<void>(`/contact/threads/${id}/read`, { method: 'PATCH' }),
 
   /** POST /api/contact/threads/:id/reply — sends a reply. */
   reply: (id: string, body: string) =>
-    adminFetch<ContactMessage>(`/api/contact/threads/${id}/reply`, {
+    adminFetch<ContactMessage>(`/contact/threads/${id}/reply`, {
       method: 'POST',
       body: JSON.stringify({ body }),
     }),
 
   /** DELETE /api/contact/threads/:id — permanently removes a thread. */
   remove: (id: string) =>
-    adminFetch<void>(`/api/contact/threads/${id}`, { method: 'DELETE' }),
+    adminFetch<void>(`/contact/threads/${id}`, { method: 'DELETE' }),
 
   /** POST /api/contact/sync — triggers a Gmail/IMAP sync on the backend. */
   sync: () =>
-    adminFetch<void>('/api/contact/sync', { method: 'POST' }),
+    adminFetch<void>('/contact/sync', { method: 'POST' }),
 
   /**
    * POST /api/contact/compose — create a new outbound thread.
@@ -727,7 +740,7 @@ export const adminContact = {
     subject?: string;
     body: string;
   }) =>
-    adminFetch<ContactThreadDetail>('/api/contact/compose', {
+    adminFetch<ContactThreadDetail>('/contact/compose', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -737,7 +750,7 @@ export const adminContact = {
    * Returns the number of threads updated.
    */
   readAll: () =>
-    adminFetch<{ updated: number }>('/api/contact/read-all', {
+    adminFetch<{ updated: number }>('/contact/read-all', {
       method: 'PATCH',
     }),
 };

@@ -38,6 +38,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Testing
+/coverage
+
 # Misc
 .vercel
 *.pem

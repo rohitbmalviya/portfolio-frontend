@@ -3,8 +3,10 @@
 // ============================================================
 //  ContactForm — public contact form that POSTs to /api/contact.
 //  Used inside ContactSection when data.showForm is true.
-//  Client component (island) — the parent section is a server
-//  component that just passes the contact email as a prop.
+//  Client component (island) — takes no props; it owns its own
+//  local state and submits directly via submitContact().
+//  Includes a visually-hidden honeypot field ("website") that
+//  the backend uses to silently drop bot submissions.
 // ============================================================
 
 import { useState } from 'react';
@@ -19,14 +21,12 @@ interface FieldErrors {
   message?: string;
 }
 
-// The email prop is kept for backward-compat with the parent server
-// component; it is no longer used since we POST directly to the API.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function ContactForm({ email: _email }: { email?: string }) {
+export function ContactForm() {
   const [name, setName] = useState('');
   const [fromEmail, setFromEmail] = useState('');
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
+  const [website, setWebsite] = useState(''); // honeypot — left empty by humans
   const [status, setStatus] = useState<FormStatus>('idle');
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
@@ -67,6 +67,7 @@ export function ContactForm({ email: _email }: { email?: string }) {
       email: fromEmail.trim(),
       subject: subject.trim() || undefined,
       message: message.trim(),
+      website,
     });
 
     if (ok) {
@@ -75,6 +76,7 @@ export function ContactForm({ email: _email }: { email?: string }) {
       setFromEmail('');
       setSubject('');
       setMessage('');
+      setWebsite('');
     } else {
       setStatus('error');
     }
@@ -101,7 +103,7 @@ export function ContactForm({ email: _email }: { email?: string }) {
             Message sent!
           </p>
           <p className="text-[13px]" style={{ color: 'var(--muted)' }}>
-            Thanks — I&apos;ll get back to you soon.
+            Thanks — your message has been sent.
           </p>
           <button
             type="button"
@@ -128,6 +130,31 @@ export function ContactForm({ email: _email }: { email?: string }) {
       style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
       aria-label="Contact form"
     >
+      {/* Honeypot — hidden from sighted/keyboard users, left blank by humans.
+          Bots that auto-fill every field will trip it; the backend silently
+          drops any submission where this is non-empty. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: '-9999px',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+        }}
+      >
+        <label htmlFor="contact-website">Website</label>
+        <input
+          id="contact-website"
+          name="website"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+          value={website}
+          onChange={(e) => setWebsite(e.target.value)}
+        />
+      </div>
+
       {/* Error banner */}
       {status === 'error' && (
         <div
@@ -140,7 +167,7 @@ export function ContactForm({ email: _email }: { email?: string }) {
           }}
         >
           <AlertCircle size={15} aria-hidden="true" className="shrink-0" />
-          Something went wrong. Please try again or email me directly.
+          Something went wrong. Please try again later.
         </div>
       )}
 

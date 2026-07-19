@@ -5,13 +5,10 @@
 //                              education | achievements)
 //  [item] = item slug / id
 //
-//  Routing precedence during transition:
-//    /projects/:x  → handled by (public)/projects/[slug]/page.tsx (static wins)
-//    /blog/:x      → handled by (public)/blog/[slug]/page.tsx     (static wins)
-//    /experience/:x, /education/:x, /achievements/:x → THIS route
-//
-//  After the legacy folders are removed (cutover), this route
-//  will also serve /projects/:x and /blog/:x.
+//  This single route serves every collection's detail pages —
+//  /projects/:x, /blog/:x, /experience/:x, /education/:x, and
+//  /achievements/:x all resolve here; there are no dedicated
+//  per-collection route folders.
 //  ISR: revalidate every 60s.
 // ============================================================
 
@@ -25,6 +22,7 @@ import {
   getExperience,
   getEducation,
   getAchievements,
+  getSiteSettings,
 } from '@/lib/api';
 import { ProjectDetail } from '@/components/pagedetail/project-detail';
 import { BlogDetail } from '@/components/pagedetail/blog-detail';
@@ -63,6 +61,9 @@ export async function generateStaticParams() {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, item } = await params;
+  // Cached at 5 min (ISR) — cheap to fetch alongside the collection item.
+  const settings = await getSiteSettings();
+  const ownerName = settings?.name || SITE_OWNER;
 
   switch (slug) {
     case 'projects': {
@@ -72,7 +73,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         title: project.title,
         description: project.oneLiner,
         openGraph: {
-          title: `${project.title} — ${SITE_OWNER}`,
+          title: `${project.title} — ${ownerName}`,
           description: project.oneLiner,
           images: project.screenshots[0]
             ? [{ url: project.screenshots[0].url, alt: project.screenshots[0].alt || project.title }]
@@ -88,7 +89,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         title: post.title,
         description: post.excerpt,
         openGraph: {
-          title: `${post.title} — ${SITE_OWNER}`,
+          title: `${post.title} — ${ownerName}`,
           description: post.excerpt,
           type: 'article',
           publishedTime: post.publishedAt ?? undefined,
@@ -113,7 +114,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         title: `${exp.role} at ${exp.company}`,
         description: exp.bullets[0] ?? `${exp.role} at ${exp.company}`,
         openGraph: {
-          title: `${exp.role} at ${exp.company} — ${SITE_OWNER}`,
+          title: `${exp.role} at ${exp.company} — ${ownerName}`,
           description: exp.bullets[0] ?? `${exp.role} at ${exp.company}`,
         },
       };
@@ -127,7 +128,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         title: `${edu.degree} — ${edu.school}`,
         description: edu.detail ?? `${edu.degree} at ${edu.school}`,
         openGraph: {
-          title: `${edu.degree} — ${edu.school} · ${SITE_OWNER}`,
+          title: `${edu.degree} — ${edu.school} · ${ownerName}`,
           description: edu.detail ?? `${edu.degree} at ${edu.school}`,
         },
       };
@@ -141,7 +142,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         title: achievement.title,
         description: achievement.description,
         openGraph: {
-          title: `${achievement.title} — ${SITE_OWNER}`,
+          title: `${achievement.title} — ${ownerName}`,
           description: achievement.description,
           images: achievement.image
             ? [{ url: achievement.image, alt: achievement.title }]

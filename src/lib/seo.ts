@@ -25,7 +25,7 @@ interface BuildPageMetadataOptions {
  *  title       = page?.metaTitle || fallbackTitle
  *  description = page?.metaDescription || settings?.ogDescription
  *                || settings?.tagline || undefined
- *  og.title    = page?.metaTitle || `${fallbackTitle} — ${SITE_OWNER}`
+ *  og.title    = page?.metaTitle || `${fallbackTitle} — ${settings?.name ?? SITE_OWNER}`
  *  og.images   = [{ url: page?.ogImage || ogImage || '/og-default.png', … }]
  */
 export function buildPageMetadata({
@@ -40,7 +40,8 @@ export function buildPageMetadata({
     settings?.ogDescription ||
     settings?.tagline ||
     undefined;
-  const ogTitle = page?.metaTitle || `${fallbackTitle} — ${SITE_OWNER}`;
+  const ownerName = settings?.name || SITE_OWNER;
+  const ogTitle = page?.metaTitle || `${fallbackTitle} — ${ownerName}`;
   const imageUrl = page?.ogImage || ogImage || '/og-default.png';
 
   return {
