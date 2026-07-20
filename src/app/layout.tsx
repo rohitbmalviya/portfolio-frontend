@@ -168,6 +168,7 @@ export default async function RootLayout({
     <html
       lang="en"
       data-theme={defaultTheme}
+      data-scroll-behavior="smooth"
       className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable}`}
       suppressHydrationWarning
     >
