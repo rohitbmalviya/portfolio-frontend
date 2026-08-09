@@ -18,11 +18,19 @@ export const SITE_TITLE_TEMPLATE = `%s — ${SITE_OWNER}`;
 
 /**
  * Public site base URL — infra constant, not CMS-driven.
- * Set NEXT_PUBLIC_SITE_URL in .env.local; falls back to the
- * production URL so existing prod behavior is unchanged.
+ * Set NEXT_PUBLIC_SITE_URL in .env.local to pin it explicitly. Otherwise
+ * we resolve the Vercel-provided domain (the production one, falling back to
+ * the per-deployment URL on preview builds) before the hardcoded production
+ * URL, so preview deployments serve an og:image URL that actually resolves —
+ * link-preview scrapers will not follow a relative or dead absolute URL.
  */
 export const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL ?? 'https://rohitmalviya.dev';
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : 'https://rohitmalviya.dev');
 
 // ── Display-name resolution (nav logo, 404 decorative line) ────
 

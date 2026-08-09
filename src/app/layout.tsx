@@ -85,20 +85,15 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: ownerName,
       title: siteTitle,
       description: siteDescription,
-      images: [
-        {
-          url: '/og-default.png',
-          width: 1200,
-          height: 630,
-          alt: siteTitle,
-        },
-      ],
+      // Image comes from src/app/opengraph-image.tsx (1200x630, generated at
+      // build time). Do not add an `images` key here — an explicit entry
+      // overrides the file convention, and the old '/og-default.png' it
+      // pointed at does not exist in public/.
     },
     twitter: {
       card: 'summary_large_image',
       title: siteTitle,
       description: siteDescription,
-      images: ['/og-default.png'],
     },
   };
 }
