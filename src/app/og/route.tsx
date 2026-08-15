@@ -1,21 +1,33 @@
+// ============================================================
+//  /og — the default Open Graph card (1200x630 PNG).
+//
+//  This is a plain route handler rather than the `opengraph-image.tsx` file
+//  convention, deliberately. Next only keeps a file-convention image when it
+//  sits in the SAME route segment as the page that exports `openGraph` — and
+//  nearly every public page here builds its own `openGraph` from the CMS
+//  (see lib/seo.ts and (public)/[slug]). A file-convention image at any
+//  ancestor segment gets dropped, silently, leaving links with no picture.
+//
+//  A fixed URL sidesteps that entirely: pages reference '/og' explicitly as
+//  their fallback image, so it survives any metadata override. It also has no
+//  content hash, which makes it stable across deploys and safe to hardcode.
+//
+//  Static (no CMS fetch): scrapers never run JS and give up quickly, so the
+//  card must not depend on the backend being reachable. Identity comes from
+//  the same env-configurable constants the metadata falls back to.
+// ============================================================
+
 import { ImageResponse } from 'next/og';
-import { SITE_OWNER, SITE_TITLE } from '@/lib/site';
+import { SITE_OWNER } from '@/lib/site';
 
 export const runtime = 'edge';
 
-export const alt = SITE_TITLE;
-export const size = {
+const size = {
   width: 1200,
   height: 630,
 };
 
-export const contentType = 'image/png';
-
-// Static (build-time) card rather than a CMS fetch: the OG image is served to
-// scrapers that never run JS and give up quickly, so it must not depend on the
-// backend being reachable. Identity comes from the same env-configurable
-// constants the metadata falls back to.
-export default function OpenGraphImage() {
+export async function GET() {
   return new ImageResponse(
     (
       <div

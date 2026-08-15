@@ -10,6 +10,7 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { getPage, getPages } from '@/lib/api';
+import { OG_IMAGE_PATH } from '@/lib/site';
 import { SectionRenderer } from '@/components/sections/section-renderer';
 
 export const revalidate = 60;
@@ -45,7 +46,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     openGraph: {
       title,
       description,
-      images: page.ogImage ? [{ url: page.ogImage }] : undefined,
+      // Must name an image explicitly: this object replaces the root layout's
+      // `openGraph` entirely, so leaving `images` out (or setting it to
+      // undefined/[]) means the page ships with no card at all.
+      images: [{ url: page.ogImage || OG_IMAGE_PATH }],
     },
   };
 }

@@ -32,6 +32,17 @@ export const SITE_URL =
       ? `https://${process.env.VERCEL_URL}`
       : 'https://rohitmalviya.dev');
 
+/**
+ * Default Open Graph card, served by app/og/route.tsx.
+ *
+ * Referenced explicitly rather than through Next's `opengraph-image.tsx` file
+ * convention: a file-convention image only survives in the exact route segment
+ * that exports `openGraph`, and almost every public page here builds its own
+ * from the CMS — so an inherited one gets silently dropped. A fixed path is
+ * immune to that, and `metadataBase` makes it absolute for scrapers.
+ */
+export const OG_IMAGE_PATH = '/og';
+
 // ── Display-name resolution (nav logo, 404 decorative line) ────
 
 /**

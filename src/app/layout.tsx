@@ -7,7 +7,13 @@
 import type { Metadata, Viewport } from 'next';
 import { Space_Grotesk, Inter, JetBrains_Mono } from 'next/font/google';
 import { ThemeProvider } from '@/components/ui/theme-provider';
-import { SITE_OWNER, SITE_TITLE, SITE_TITLE_TEMPLATE, SITE_URL } from '@/lib/site';
+import {
+  OG_IMAGE_PATH,
+  SITE_OWNER,
+  SITE_TITLE,
+  SITE_TITLE_TEMPLATE,
+  SITE_URL,
+} from '@/lib/site';
 import { isSafeCssColor } from '@/lib/color';
 import { getSiteSettings } from '@/lib/api';
 import './globals.css';
@@ -85,15 +91,21 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: ownerName,
       title: siteTitle,
       description: siteDescription,
-      // Image comes from src/app/opengraph-image.tsx (1200x630, generated at
-      // build time). Do not add an `images` key here — an explicit entry
-      // overrides the file convention, and the old '/og-default.png' it
-      // pointed at does not exist in public/.
+      // Default card for any route that does not build its own `openGraph`.
+      // Referenced by path (app/og/route.tsx) rather than via the
+      // `opengraph-image.tsx` file convention: a page exporting its own
+      // `openGraph` replaces this object wholesale, and a file-convention image
+      // only survives in the exact segment that declares it — so CMS-driven
+      // pages would silently ship with no picture. See OG_IMAGE_PATH.
+      images: [
+        { url: OG_IMAGE_PATH, width: 1200, height: 630, alt: siteTitle },
+      ],
     },
     twitter: {
       card: 'summary_large_image',
       title: siteTitle,
       description: siteDescription,
+      images: [OG_IMAGE_PATH],
     },
   };
 }

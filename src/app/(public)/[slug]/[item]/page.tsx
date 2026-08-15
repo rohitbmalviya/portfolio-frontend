@@ -29,7 +29,7 @@ import { BlogDetail } from '@/components/pagedetail/blog-detail';
 import { ExperienceDetail } from '@/components/pagedetail/experience-detail';
 import { EducationDetail } from '@/components/pagedetail/education-detail';
 import { AchievementDetail } from '@/components/pagedetail/achievement-detail';
-import { SITE_OWNER } from '@/lib/site';
+import { OG_IMAGE_PATH, SITE_OWNER } from '@/lib/site';
 
 export const revalidate = 60;
 
@@ -77,7 +77,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
           description: project.oneLiner,
           images: project.screenshots[0]
             ? [{ url: project.screenshots[0].url, alt: project.screenshots[0].alt || project.title }]
-            : [],
+            : [{ url: OG_IMAGE_PATH, alt: project.title }],
         },
       };
     }
@@ -95,13 +95,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
           publishedTime: post.publishedAt ?? undefined,
           images: post.coverImage
             ? [{ url: post.coverImage, alt: post.title }]
-            : [],
+            : [{ url: OG_IMAGE_PATH, alt: post.title }],
         },
         twitter: {
           card: 'summary_large_image',
           title: post.title,
           description: post.excerpt,
-          images: post.coverImage ? [post.coverImage] : [],
+          images: [post.coverImage || OG_IMAGE_PATH],
         },
       };
     }
@@ -116,6 +116,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         openGraph: {
           title: `${exp.role} at ${exp.company} — ${ownerName}`,
           description: exp.bullets[0] ?? `${exp.role} at ${exp.company}`,
+          images: [{ url: OG_IMAGE_PATH, alt: `${exp.role} at ${exp.company}` }],
         },
       };
     }
@@ -130,6 +131,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         openGraph: {
           title: `${edu.degree} — ${edu.school} · ${ownerName}`,
           description: edu.detail ?? `${edu.degree} at ${edu.school}`,
+          images: [{ url: OG_IMAGE_PATH, alt: `${edu.degree} — ${edu.school}` }],
         },
       };
     }
@@ -146,7 +148,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
           description: achievement.description,
           images: achievement.image
             ? [{ url: achievement.image, alt: achievement.title }]
-            : [],
+            : [{ url: OG_IMAGE_PATH, alt: achievement.title }],
         },
       };
     }
