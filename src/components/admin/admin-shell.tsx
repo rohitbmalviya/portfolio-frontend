@@ -41,7 +41,12 @@ export function AdminShell({ title, description, actions, children }: Props) {
   }, []);
 
   return (
-    <div className="flex flex-col min-h-screen">
+    // min-h-full, NOT min-h-screen: this renders inside app/admin/layout.tsx's
+    // <main>, which is already exactly 100vh with overflow-y-auto. Demanding a
+    // second viewport height in there pushed the shell past its parent by the
+    // height of the sticky header alone, so <main> showed a scrollbar before
+    // any content existed — giving two visible scrollbars.
+    <div className="flex flex-col min-h-full">
       {/* Page header */}
       <header
         className="sticky top-0 z-10 flex items-center justify-between gap-4 px-6 py-4 border-b"

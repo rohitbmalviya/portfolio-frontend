@@ -5,8 +5,8 @@
 //  site (canvas). Theme-aware (reads --accent / --muted tokens),
 //  performance-guarded, reduced-motion safe.
 //  Fixed, full-viewport, behind content (z-0), pointer-events none.
-//  Masked to fade out toward the bottom so it stays calm over
-//  content-heavy sections while emphasising the hero.
+//  Masked to fade out toward the bottom (see `fade` below) so it stays
+//  calm over content-heavy sections while emphasising the hero.
 // ============================================================
 
 import { useEffect, useRef } from 'react';
@@ -185,11 +185,18 @@ export function ParticlesBackground() {
     };
   }, []);
 
+  // The fade promised in the header comment lives here. Without it the
+  // constellation renders at full strength to the bottom of the viewport,
+  // which reads as busy texture over content — and as the only thing on
+  // screen when a page has no sections to render.
+  const fade = 'linear-gradient(to bottom, black 0%, black 30%, transparent 80%)';
+
   return (
     <canvas
       ref={canvasRef}
       aria-hidden="true"
       className="fixed inset-0 z-0 pointer-events-none"
+      style={{ WebkitMaskImage: fade, maskImage: fade }}
     />
   );
 }

@@ -119,17 +119,6 @@ function AchievementsContent() {
                 </button>
               </div>
 
-              {/* Optional thumbnail */}
-              {item.image && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={item.image}
-                  alt=""
-                  aria-hidden="true"
-                  className="shrink-0 w-10 h-10 rounded-[8px] object-cover border mt-0.5"
-                  style={{ borderColor: 'var(--border)' }}
-                />
-              )}
 
               {/* Content */}
               <div className="flex-1 min-w-0">

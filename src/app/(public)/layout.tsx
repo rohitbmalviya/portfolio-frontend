@@ -28,10 +28,14 @@ export default async function PublicLayout({
       {/* Constellation background — fixed, behind everything (z-0) */}
       <ParticlesBackground />
 
-      {/* Content sits above the canvas */}
-      <div className="relative z-10">
+      {/* Content sits above the canvas.
+          min-h keeps the footer at the bottom when a page renders no
+          sections — without it <main> collapses to zero height and the
+          footer lands directly under the nav, which reads as a broken
+          page. Matches the treatment already used in app/not-found.tsx. */}
+      <div className="relative z-10 flex min-h-screen flex-col">
         <Nav navItems={navItems} settings={settings} />
-        <main id="main-content" tabIndex={-1}>
+        <main id="main-content" tabIndex={-1} className="flex-1">
           {children}
         </main>
         <Footer navItems={navItems} settings={settings} />
