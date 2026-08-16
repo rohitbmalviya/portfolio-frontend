@@ -3,7 +3,7 @@
 //  Rendered entirely from the CMS "home" page (GET /api/pages/home).
 //  The home page must exist in the database (seeded / created in
 //  admin). No inline static fallback — the CMS is the source of truth.
-//  ISR: revalidate every 60s.
+//  Rendered on every request — no caching, always live API data.
 // ============================================================
 
 import type { Metadata } from 'next';
@@ -12,7 +12,7 @@ import { SectionRenderer } from '@/components/sections/section-renderer';
 import { SITE_TITLE } from '@/lib/site';
 import { buildPageMetadata } from '@/lib/seo';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 export async function generateMetadata(): Promise<Metadata> {
   const [page, settings] = await Promise.all([getPage('home'), getSiteSettings()]);

@@ -67,7 +67,7 @@ src/
 Fetches `GET /api/pages/home` and renders its ordered, enabled sections through `SectionRenderer`. The CMS is the sole source of truth — there is no static inline fallback.
 
 **`/:slug` (CMS pages)**
-Handles any page created in the admin (e.g., `/contact`, `/about`, `/uses`). Reserved slugs (`home`, `projects`, `blog`) are excluded so they never shadow dedicated routes. New pages render on demand (ISR, `dynamicParams: true`). Metadata (`metaTitle`, `metaDescription`, `ogImage`) is sourced from the CMS page record.
+Handles any page created in the admin (e.g., `/contact`, `/about`, `/uses`). Every page is server-rendered on demand — nothing is prerendered, so a page created or edited in the admin is live on the next request. Metadata (`metaTitle`, `metaDescription`, `ogImage`) is sourced from the CMS page record.
 
 **`/:slug/:item` (Unified detail route)**
 A single route handles detail pages for every collection. `[slug]` is the collection name; `[item]` is the item slug or id:
@@ -80,7 +80,7 @@ A single route handles detail pages for every collection. `[slug]` is the collec
 | `/education/:id` | Education | `EducationDetail` |
 | `/achievements/:id` | Achievements | `AchievementDetail` |
 
-All items are pre-rendered at build time via `generateStaticParams` and revalidated every 60 seconds (ISR). Per-item Open Graph metadata is generated dynamically via `generateMetadata`.
+Every item is fetched from the API and server-rendered on request. Per-item Open Graph metadata is generated dynamically via `generateMetadata`.
 
 ### SectionRenderer
 
@@ -126,7 +126,7 @@ Because Next.js rewrites proxy the request server-side, the backend's `Set-Cooki
 
 - On a `401`, `adminFetch`/`adminUpload` transparently POST `/backend-api/auth/refresh` once (cookie-based) and retry the original call; concurrent 401s share a single in-flight refresh so there's no request stampede. If refresh fails, the user is redirected to `/admin/login`.
 - `src/middleware.ts` gates `/admin/*` (except `/admin/login`) on the mere *presence* of the `access_token` cookie, redirecting to `/admin/login` if it's missing. This is a cheap presence check, not JWT verification — the client-side `AdminAuthGuard` (calls `GET /api/auth/me`) and the backend's own JWT validation remain the real enforcement.
-- Public reads (`lib/api.ts`) are server-side ISR fetches straight to `NEXT_PUBLIC_API_URL` and need no cookies, so they bypass the proxy entirely.
+- Public reads (`lib/api.ts`) are uncached server-side fetches straight to `NEXT_PUBLIC_API_URL` and need no cookies, so they bypass the proxy entirely.
 
 ### Admin Sidebar Navigation
 
@@ -173,7 +173,7 @@ src/
 │   ├── layout/                # Navbar, Footer, ParticlesBackground
 │   └── ui/                    # Shared primitives: Button, Tag, SkillIcon, ThemeToggle, ThemeProvider, SectionHeading, SectionCta, ErrorState
 └── lib/
-    ├── api.ts                 # Typed ISR fetch client for all public API reads (server-side, direct to backend)
+    ├── api.ts                 # Typed uncached fetch client for all public API reads (server-side, direct to backend)
     ├── admin-api.ts           # Authenticated admin API client — same-origin via /backend-api proxy, cookie-only auth
     ├── types.ts               # TypeScript mirror of the backend Prisma schema
     ├── seo.ts                 # buildPageMetadata — shared CMS-driven metadata builder
@@ -263,9 +263,11 @@ X-XSS-Protection: 1; mode=block
 Referrer-Policy: strict-origin-when-cross-origin
 ```
 
-### ISR and caching
+### Caching
 
-All public data fetches use Next.js ISR with a 60-second revalidation window (`revalidate = 60`). Site settings use a longer 300-second window. When the backend is unreachable, `lib/api.ts` returns `null` or an empty array — pages still render with empty states rather than throwing.
+There is none, by design. Every public data fetch in `lib/api.ts` uses `cache: 'no-store'`, and every public route is marked `export const dynamic = 'force-dynamic'`, so each request server-renders against live API data. A CMS edit shows up on the very next page load — there is no revalidation window and no build-time prerendering to invalidate.
+
+The tradeoff is that every visit costs one API round-trip per data dependency (the public layout alone fetches nav + settings, and each section component fetches its own collection). `lib/api.ts` softens this with an 8-second timeout and a single retry, and when the backend is unreachable it returns `null` or an empty array — pages still render with empty states rather than throwing.
 
 ### Theme
 

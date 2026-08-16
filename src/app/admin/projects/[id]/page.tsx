@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Save } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Save } from 'lucide-react';
 import Link from 'next/link';
 import { adminProjects } from '@/lib/admin-api';
 import { reconcileMultiMedia } from '@/lib/media-save';
@@ -76,6 +76,11 @@ function ProjectFormContent({ projectId }: { projectId: string | null }) {
   const [saving, setSaving] = useState(false);
   const isNew = !projectId;
 
+  // Auto-captured live-site screenshot. Not part of FormState — it is derived
+  // from liveUrl on the server, never edited directly here.
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [refreshingPreview, setRefreshingPreview] = useState(false);
+
   // Track originalMediaIds to detect additions/removals on update.
   const originalMediaIdsRef = useRef<string[]>([]);
 
@@ -93,6 +98,7 @@ function ProjectFormContent({ projectId }: { projectId: string | null }) {
         originalMediaIdsRef.current = existingScreenshots.map((s) =>
           'mediaId' in s ? s.mediaId : '',
         );
+        setPreviewImage(p.previewImage ?? null);
         setForm({
           slug: p.slug,
           title: p.title,
@@ -114,6 +120,25 @@ function ProjectFormContent({ projectId }: { projectId: string | null }) {
       .catch((err) => toastError(err instanceof Error ? err.message : 'Failed to load project.'))
       .finally(() => setLoading(false));
   }, [projectId, toastError]);
+
+  /**
+   * Force a fresh capture of the live site. Generation also happens
+   * automatically when liveUrl or slug changes on save; this is the manual
+   * escape hatch for when the site has been redeployed since.
+   */
+  async function refreshPreview() {
+    if (!projectId) return;
+    setRefreshingPreview(true);
+    try {
+      const updated = await adminProjects.regeneratePreview(projectId);
+      setPreviewImage(updated.previewImage ?? null);
+      success('Live preview updated.');
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Could not refresh the preview.');
+    } finally {
+      setRefreshingPreview(false);
+    }
+  }
 
   // Prefill `order` for a brand-new project to the next free slot.
   useEffect(() => {
@@ -193,6 +218,7 @@ function ProjectFormContent({ projectId }: { projectId: string | null }) {
         originalMediaIdsRef.current = refreshedScreenshots.map((s) =>
           'mediaId' in s ? s.mediaId : '',
         );
+        setPreviewImage(refreshed.previewImage ?? null);
         setForm((f) => ({ ...f, screenshots: refreshedScreenshots }));
       }
     } catch (err) {
@@ -322,6 +348,48 @@ function ProjectFormContent({ projectId }: { projectId: string | null }) {
             max={4}
           />
         </AdminCard>
+
+        {/* Live-site preview — auto-captured from Live URL, read-only here */}
+        {!isNew && (
+          <AdminCard>
+            <h2 className="text-[14px] font-semibold mb-4" style={{ color: 'var(--text)' }}>
+              Live preview
+            </h2>
+            <p className="text-[12px] mb-3" style={{ color: 'var(--muted)' }}>
+              Captured automatically from the Live URL and shown as the card thumbnail — it
+              takes precedence over the screenshots above. Re-captured on save whenever the
+              Live URL or slug changes; refresh manually after a redeploy.
+            </p>
+
+            {previewImage ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={previewImage}
+                alt="Live site preview"
+                className="w-full max-w-[320px] rounded-[8px] border object-cover object-top"
+                style={{ borderColor: 'var(--border)', aspectRatio: '16 / 10' }}
+              />
+            ) : (
+              <p className="text-[12px] italic" style={{ color: 'var(--muted)' }}>
+                {form.liveUrl
+                  ? 'No preview captured yet. Save the project or refresh below.'
+                  : 'Add a Live URL to enable automatic previews.'}
+              </p>
+            )}
+
+            <div className="mt-4">
+              <AdminButton
+                variant="ghost"
+                loading={refreshingPreview}
+                onClick={refreshPreview}
+                disabled={!form.liveUrl}
+              >
+                {!refreshingPreview && <RefreshCw size={14} aria-hidden="true" />}
+                {refreshingPreview ? 'Capturing…' : 'Refresh preview'}
+              </AdminButton>
+            </div>
+          </AdminCard>
+        )}
 
         {/* Content */}
         <AdminCard>

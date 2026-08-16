@@ -267,6 +267,12 @@ export interface Project {
   stack: string[];
   metric: string;
   liveUrl?: string | null;
+  /**
+   * Auto-generated screenshot of `liveUrl`, captured server-side and cached in
+   * Cloudinary. Null when the project has no live URL or the capture failed.
+   * Takes precedence over `screenshots[0]` for the card thumbnail.
+   */
+  previewImage?: string | null;
   /** Read shape: normalized media records (id + url + optional alt). */
   screenshots: { mediaId: string; url: string; alt?: string }[];
   overview: string;

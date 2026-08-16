@@ -91,12 +91,6 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: ownerName,
       title: siteTitle,
       description: siteDescription,
-      // Default card for any route that does not build its own `openGraph`.
-      // Referenced by path (app/og/route.tsx) rather than via the
-      // `opengraph-image.tsx` file convention: a page exporting its own
-      // `openGraph` replaces this object wholesale, and a file-convention image
-      // only survives in the exact segment that declares it — so CMS-driven
-      // pages would silently ship with no picture. See OG_IMAGE_PATH.
       images: [
         { url: OG_IMAGE_PATH, width: 1200, height: 630, alt: siteTitle },
       ],
@@ -123,12 +117,6 @@ export const viewport: Viewport = {
 
 // ── No-flash theme script ─────────────────────────────────────
 
-// This runs synchronously before any CSS/JS loads, so the
-// user never sees the wrong theme on first paint. `defaultTheme`
-// is resolved server-side (SiteSettings.defaultTheme → the
-// NEXT_PUBLIC_DEFAULT_THEME env var → 'dark') and baked in as the
-// only default candidate; a user's own localStorage choice still
-// wins whenever one is present.
 function buildNoFlashScript(defaultTheme: 'dark' | 'light'): string {
   return `(function(){try{var t=localStorage.getItem('theme');if(!t){var def='${defaultTheme}';t=def==='light'?'light':(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');}document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
 }
@@ -142,12 +130,6 @@ function resolveDefaultTheme(settingsTheme?: string | null): 'dark' | 'light' {
 
 // ── Brand accent override (SiteSettings.brandAccent) ──────────
 
-// brandAccent is admin-editable free text that lands directly inside
-// a <style> tag, so it MUST be strictly whitelisted (hex/rgb/hsl only)
-// before use — anything else is dropped and the CSS defaults apply.
-// Only the accent color and its transparency-derived tokens are
-// overridden; --grad-from/--grad-to are a deliberate two-tone gradient
-// (not a pure function of --accent even today) so they're left alone.
 function buildAccentOverrideCss(accent: string): string {
   const rule = (selector: string) =>
     `${selector}{--accent:${accent};--accent-dim:color-mix(in srgb, ${accent} 12%, transparent);--accent-glow:color-mix(in srgb, ${accent} 25%, transparent);--hero-glow:color-mix(in srgb, ${accent} 7%, transparent);}`;
@@ -188,7 +170,7 @@ export default async function RootLayout({
             is a valid, whitelisted CSS color; otherwise the CSS defaults apply. */}
         {accentCss && <style dangerouslySetInnerHTML={{ __html: accentCss }} />}
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <ThemeProvider>
           {children}
         </ThemeProvider>

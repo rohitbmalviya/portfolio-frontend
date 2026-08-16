@@ -9,15 +9,13 @@
 //  /projects/:x, /blog/:x, /experience/:x, /education/:x, and
 //  /achievements/:x all resolve here; there are no dedicated
 //  per-collection route folders.
-//  ISR: revalidate every 60s.
+//  Rendered on every request — no caching, always live API data.
 // ============================================================
 
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
-  getProjects,
   getProject,
-  getBlogPosts,
   getBlogPost,
   getExperience,
   getEducation,
@@ -31,37 +29,16 @@ import { EducationDetail } from '@/components/pagedetail/education-detail';
 import { AchievementDetail } from '@/components/pagedetail/achievement-detail';
 import { OG_IMAGE_PATH, SITE_OWNER } from '@/lib/site';
 
-export const revalidate = 60;
+export const dynamic = 'force-dynamic';
 
 interface Props {
   params: Promise<{ slug: string; item: string }>;
-}
-
-// ── Static params — pre-render all known items at build time ──
-
-export async function generateStaticParams() {
-  const [projects, posts, experiences, educations, achievements] = await Promise.all([
-    getProjects(),
-    getBlogPosts(),
-    getExperience(),
-    getEducation(),
-    getAchievements(),
-  ]);
-
-  return [
-    ...projects.map((p) => ({ slug: 'projects', item: p.slug })),
-    ...posts.map((p) => ({ slug: 'blog', item: p.slug })),
-    ...experiences.map((e) => ({ slug: 'experience', item: e.id })),
-    ...educations.map((e) => ({ slug: 'education', item: e.id })),
-    ...achievements.map((a) => ({ slug: 'achievements', item: a.id })),
-  ];
 }
 
 // ── Metadata ──────────────────────────────────────────────────
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug, item } = await params;
-  // Cached at 5 min (ISR) — cheap to fetch alongside the collection item.
   const settings = await getSiteSettings();
   const ownerName = settings?.name || SITE_OWNER;
 

@@ -407,6 +407,15 @@ export const adminProjects = {
 
   togglePublished: (id: string) =>
     adminFetch<Project>(`/projects/${id}/publish`, { method: 'PATCH' }),
+
+  /**
+   * POST /api/projects/:id/preview — re-capture the live-site screenshot used
+   * as the card thumbnail. Runs synchronously (a headless render takes a few
+   * seconds) and resolves with the updated project. Rejects with a readable
+   * message if the project has no liveUrl or the capture failed.
+   */
+  regeneratePreview: (id: string) =>
+    adminFetch<Project>(`/projects/${id}/preview`, { method: 'POST' }),
 };
 
 // ── Blog ──────────────────────────────────────────────────────

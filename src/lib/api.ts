@@ -1,8 +1,9 @@
 // ============================================================
 //  lib/api.ts — Typed fetch client for the portfolio backend
 //  Base URL: NEXT_PUBLIC_API_URL (env)
-//  All public reads use ISR (revalidate: 60s) so the public
-//  site is cached and visitors don't hit the live API directly.
+//  All public reads are uncached (`cache: 'no-store'`) — every
+//  request hits the live API so a CMS edit is visible immediately,
+//  with no revalidation window to wait out.
 //  Graceful fallback: try/catch returns null on error so the
 //  app still compiles & runs with empty states if API is down.
 //
@@ -27,9 +28,6 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
-/** ISR revalidation window for site settings (seconds). */
-const SETTINGS_CACHE_SECONDS = 300;
-
 // ── Low-level fetch helper ────────────────────────────────────
 
 // All backend responses are wrapped: { data: T }
@@ -42,10 +40,7 @@ const MAX_ATTEMPTS = 2; // initial try + 1 retry on transient failures
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function apiFetch<T>(
-  path: string,
-  revalidate = 60,
-): Promise<T | null> {
+async function apiFetch<T>(path: string): Promise<T | null> {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Abort the request if the backend hangs past the timeout.
     const controller = new AbortController();
@@ -53,7 +48,8 @@ async function apiFetch<T>(
 
     try {
       const res = await fetch(`${BASE_URL}${path}`, {
-        next: { revalidate },
+        // Never cached — read straight from the API on every request.
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
@@ -184,7 +180,7 @@ export async function getAchievements(): Promise<Achievement[]> {
 // ── Site Settings ─────────────────────────────────────────────
 
 export async function getSiteSettings(): Promise<SiteSettings | null> {
-  return apiFetch<SiteSettings>('/api/settings', SETTINGS_CACHE_SECONDS);
+  return apiFetch<SiteSettings>('/api/settings');
 }
 
 // ── Nav ───────────────────────────────────────────────────────
@@ -192,11 +188,11 @@ export async function getSiteSettings(): Promise<SiteSettings | null> {
 /**
  * GET /api/pages/nav (PUBLIC) — returns { slug, title, navLabel, navOrder }[]
  * for pages where showInNav=true and published=true, ordered by navOrder.
- * ISR-cached at 60 s. Returns [] if the API is unreachable so the
- * caller can fall back to a static set.
+ * Returns [] if the API is unreachable so the caller can fall back to a
+ * static set.
  */
 export async function getNav(): Promise<NavPage[]> {
-  const result = await apiFetch<NavPage[]>('/api/pages/nav', 60);
+  const result = await apiFetch<NavPage[]>('/api/pages/nav');
   return result ?? [];
 }
 
@@ -210,6 +206,7 @@ export async function getNav(): Promise<NavPage[]> {
 export async function getConfigOptions(key: string): Promise<ConfigOption[]> {
   try {
     const res = await fetch(`${BASE_URL}/api/config/${key}`, {
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
     });
     if (!res.ok) return [];

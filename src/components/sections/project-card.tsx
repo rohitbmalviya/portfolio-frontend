@@ -15,7 +15,18 @@ interface ProjectCardProps {
 }
 
 export function ProjectCard({ project }: ProjectCardProps) {
-  const hasScreenshot = project.screenshots && project.screenshots.length > 0;
+  // Thumbnail precedence:
+  //   1. previewImage — auto-captured screenshot of the live site
+  //   2. screenshots[0] — the manually uploaded image
+  //   3. neither — gradient placeholder below
+  // (2) also covers the case where the project has a liveUrl but the capture
+  // failed or hasn't finished yet, since previewImage is null until it lands.
+  const uploaded = project.screenshots?.[0];
+  const thumbnail = project.previewImage
+    ? { url: project.previewImage, alt: `${project.title} — live site preview` }
+    : uploaded
+      ? { url: uploaded.url, alt: uploaded.alt || project.title }
+      : null;
 
   return (
     <article
@@ -38,17 +49,17 @@ export function ProjectCard({ project }: ProjectCardProps) {
         className={[
           'h-[150px] border-b border-[--border] relative flex items-center justify-center',
           'font-mono text-[12px] text-[--muted]',
-          hasScreenshot ? '' : 'bg-gradient-to-br from-[--thumb-from] to-[--thumb-to]',
+          thumbnail ? '' : 'bg-gradient-to-br from-[--thumb-from] to-[--thumb-to]',
         ].join(' ')}
-        aria-hidden={!hasScreenshot}
+        aria-hidden={!thumbnail}
       >
-        {hasScreenshot ? (
+        {thumbnail ? (
           <Image
-            src={project.screenshots[0].url}
-            alt={project.screenshots[0].alt || project.title}
+            src={thumbnail.url}
+            alt={thumbnail.alt}
             fill
             sizes="(max-width: 760px) 100vw, 50vw"
-            className="object-cover"
+            className="object-cover object-top"
           />
         ) : (
           <span className="select-none">[ screenshot ]</span>
