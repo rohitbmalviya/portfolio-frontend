@@ -28,6 +28,29 @@ import type {
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 
+/**
+ * Base path for calls that originate in the BROWSER.
+ *
+ * Server-side reads (apiFetch below) must use the absolute BASE_URL — there is
+ * no origin to be relative to. But a fetch running in the browser should go
+ * through the same-origin `/backend-api/*` rewrite (see next.config.ts) that
+ * lib/admin-api.ts uses, rather than hitting the backend host directly:
+ *
+ *   • no cross-origin preflight, no second DNS + TLS handshake
+ *   • the backend URL is never exposed in the network tab
+ *   • one consistent path for every browser-originated request
+ *
+ * The rewrite maps /backend-api/:path* → ${NEXT_PUBLIC_API_URL}/api/:path*,
+ * so callers pass the path WITHOUT the leading `/api`.
+ *
+ * These helpers are isomorphic — `submitContact` and `getConfigOptions` are
+ * only called from client components today, but the server branch keeps them
+ * correct if that ever changes.
+ */
+function browserBase(): string {
+  return typeof window === 'undefined' ? `${BASE_URL}/api` : '/backend-api';
+}
+
 // ── Low-level fetch helper ────────────────────────────────────
 
 // All backend responses are wrapped: { data: T }
@@ -201,11 +224,12 @@ export async function getNav(): Promise<NavPage[]> {
 /**
  * GET /api/config/:key — returns the items array for a config key.
  * Public endpoint (no auth). Returns [] on error or if API is unreachable.
- * Intended for use in client components that need to populate dropdowns.
+ * Called from client components that need to populate dropdowns, so it routes
+ * through the same-origin proxy — see browserBase().
  */
 export async function getConfigOptions(key: string): Promise<ConfigOption[]> {
   try {
-    const res = await fetch(`${BASE_URL}/api/config/${key}`, {
+    const res = await fetch(`${browserBase()}/config/${key}`, {
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -222,8 +246,9 @@ export async function getConfigOptions(key: string): Promise<ConfigOption[]> {
 /**
  * POST /api/contact — submits a contact form.
  * Uses a plain fetch (not apiFetch) because this is a client-side
- * mutation, not an ISR-cached read. Returns true on success,
- * false on any network or HTTP error.
+ * mutation, not a server-side read. Routes through the same-origin
+ * proxy — see browserBase(). Returns true on success, false on any
+ * network or HTTP error.
  *
  * `website` is an optional honeypot field — always sent empty by the
  * real form; the backend silently drops submissions where it's non-empty.
@@ -236,7 +261,7 @@ export async function submitContact(payload: {
   website?: string;
 }): Promise<boolean> {
   try {
-    const res = await fetch(`${BASE_URL}/api/contact`, {
+    const res = await fetch(`${browserBase()}/contact`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
