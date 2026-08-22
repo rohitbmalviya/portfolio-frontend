@@ -12,7 +12,7 @@
 //   usage = 'resume' | 'og'
 // ============================================================
 
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Save, Loader2, Plus, Trash2, Upload, Download, ExternalLink } from 'lucide-react';
 import { adminSettings } from '@/lib/admin-api';
 import { reconcileSingleMedia } from '@/lib/media-save';
@@ -30,6 +30,7 @@ import {
   AdminSelect,
 } from '@/components/admin/ui';
 import { ImageUpload, type ImageValue } from '@/components/admin/image-upload';
+import { MailConnection } from '@/components/admin/mail-connection';
 
 // ── Form state ─────────────────────────────────────────────────
 // `resumeValue` and `ogImageValue` hold deferred media values.
@@ -505,6 +506,16 @@ function SettingsContent() {
           </AdminButton>
         </div>
       </form>
+
+      {/* Outside the <form>: connecting is an OAuth redirect, not a field that
+          participates in "Save settings". Nesting it would also make its
+          buttons submit the form. Suspense is required because it reads
+          useSearchParams to pick up the ?mail= result from the callback. */}
+      <div className="mt-6">
+        <Suspense fallback={null}>
+          <MailConnection />
+        </Suspense>
+      </div>
     </AdminShell>
   );
 }

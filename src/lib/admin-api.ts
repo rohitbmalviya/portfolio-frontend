@@ -765,6 +765,37 @@ export const adminConfig = {
     }),
 };
 
+// ── Mail (Gmail OAuth connection) ─────────────────────────────
+
+export interface MailStatus {
+  connected: boolean;
+  email: string | null;
+  connectedAt: string | null;
+  lastSyncAt: string | null;
+  scope: string | null;
+  /** ENCRYPTION_KEY is set, so a refresh token can be stored securely. */
+  encryptionReady: boolean;
+  /** GOOGLE_CLIENT_ID/SECRET are set, so the OAuth flow can run at all. */
+  oauthConfigured: boolean;
+}
+
+export const adminMail = {
+  /** GET /api/mail/status — is a mailbox connected, and which one. */
+  status: () => adminFetch<MailStatus>('/mail/status'),
+
+  /**
+   * GET /api/mail/connect — returns the Google consent URL.
+   *
+   * The server returns a URL rather than a 302 because fetch would follow a
+   * redirect opaquely and never surface Google's consent page. The caller
+   * navigates the browser there itself.
+   */
+  connectUrl: () => adminFetch<{ url: string }>('/mail/connect'),
+
+  /** DELETE /api/mail/disconnect — revokes with Google, then forgets it. */
+  disconnect: () => adminFetch<void>('/mail/disconnect', { method: 'DELETE' }),
+};
+
 // ── Contact (admin) ───────────────────────────────────────────
 
 /** ContactThread with messages guaranteed to be present (returned by getThread). */
