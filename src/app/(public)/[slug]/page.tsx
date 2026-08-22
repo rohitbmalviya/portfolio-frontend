@@ -3,7 +3,8 @@
 //  Renders ANY published page created in the admin (e.g. /contact,
 //  /testing) by fetching GET /api/pages/:slug and rendering its
 //  sections.
-//  Rendered on every request — no caching, always live API data.
+//  ISR-cached; an admin save invalidates it on demand via
+//  /api/revalidate, so edits are live on the next request.
 // ============================================================
 
 import type { Metadata } from 'next';
@@ -12,7 +13,12 @@ import { getPage } from '@/lib/api';
 import { OG_IMAGE_PATH } from '@/lib/site';
 import { SectionRenderer } from '@/components/sections/section-renderer';
 
-export const dynamic = 'force-dynamic';
+export const revalidate = 600;
+
+// Vercel kills a function at its duration limit. The API client allows a 20s
+// timeout to survive a backend cold start, so this route needs headroom above
+// that on the rare render that misses the cache.
+export const maxDuration = 30;
 
 interface Props {
   params: Promise<{ slug: string }>;

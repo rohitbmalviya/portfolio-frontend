@@ -1,9 +1,20 @@
 // ============================================================
 //  lib/api.ts — Typed fetch client for the portfolio backend
 //  Base URL: NEXT_PUBLIC_API_URL (env)
-//  All public reads are uncached (`cache: 'no-store'`) — every
-//  request hits the live API so a CMS edit is visible immediately,
-//  with no revalidation window to wait out.
+//
+//  CACHING — ISR + on-demand invalidation.
+//  Public reads are cached and tagged. Two things invalidate them:
+//    1. The time window below (a safety net).
+//    2. An admin save, which POSTs /api/revalidate and calls
+//       revalidateTag — so an edit is live on the next request,
+//       with no window to wait out.
+//
+//  This matters for more than freshness. The backend runs on Cloud
+//  Run with min-instances=0 and Neon autosuspends, so a cold start
+//  measured 16.9s end-to-end. Serving a cached render means visitors
+//  never wait on that — the origin wakes in the background instead
+//  of blocking the page.
+//
 //  Graceful fallback: try/catch returns null on error so the
 //  app still compiles & runs with empty states if API is down.
 //
@@ -51,6 +62,46 @@ function browserBase(): string {
   return typeof window === 'undefined' ? `${BASE_URL}/api` : '/backend-api';
 }
 
+// ── Cache tags ────────────────────────────────────────────────
+
+/**
+ * Tags attached to cached reads so an admin save can invalidate exactly the
+ * content it touched. Shared with app/api/revalidate/route.ts, which is the
+ * only thing that calls revalidateTag.
+ */
+export const CACHE_TAGS = {
+  pages: 'pages',
+  projects: 'projects',
+  blog: 'blog',
+  skills: 'skills',
+  experience: 'experience',
+  education: 'education',
+  achievements: 'achievements',
+  settings: 'settings',
+} as const;
+
+export type CacheTag = (typeof CACHE_TAGS)[keyof typeof CACHE_TAGS];
+
+/** Every tag — used when a mutation could plausibly affect any page. */
+export const ALL_CACHE_TAGS: CacheTag[] = Object.values(CACHE_TAGS);
+
+/**
+ * Time-based revalidation window (seconds).
+ *
+ * ISR is stale-while-revalidate: the cached page is served immediately and the
+ * re-render happens in the background, so this window has NO effect on what a
+ * visitor waits for. It only controls how often the origin is asked, which
+ * makes a moderate value better than a long one:
+ *
+ *   • Admin saves already invalidate on demand, so freshness isn't the driver.
+ *   • The real risk is a bad render being cached — e.g. the Vercel build
+ *     prerenders `/` while the backend is cold, baking an empty page. A
+ *     shorter window bounds how long that persists.
+ *   • Periodic background revalidation also keeps Cloud Run and Neon warm,
+ *     which shortens the cold starts that caused this in the first place.
+ */
+const REVALIDATE_SECONDS = 600;
+
 // ── Low-level fetch helper ────────────────────────────────────
 
 // All backend responses are wrapped: { data: T }
@@ -58,21 +109,43 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
-const FETCH_TIMEOUT_MS = 8000;
-const MAX_ATTEMPTS = 2; // initial try + 1 retry on transient failures
+/**
+ * Per-request timeout.
+ *
+ * The old value was 8s with one retry — a 16.3s total budget. A measured cold
+ * start (Cloud Run boot + Prisma connect + Neon wake) took 16.9s, so BOTH
+ * attempts aborted before the backend replied and the page rendered empty.
+ * 20s clears that with margin.
+ *
+ * Upper bound is Vercel's function limit, so public routes that can miss the
+ * cache also set `export const maxDuration` — see app/(public)/*.
+ */
+const FETCH_TIMEOUT_MS = 20_000;
+
+/**
+ * Retries apply to fast failures (5xx) only, NOT timeouts.
+ *
+ * A retry after a 20s abort would double the budget and blow the function
+ * limit for no gain: if the backend didn't answer in 20s it is not going to
+ * answer in the next 20s either. A 5xx comes back immediately, so retrying
+ * that is cheap and often works.
+ */
+const MAX_5XX_RETRIES = 1;
+const RETRY_BACKOFF_MS = 500;
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function apiFetch<T>(path: string): Promise<T | null> {
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+async function apiFetch<T>(path: string, tags: CacheTag[]): Promise<T | null> {
+  for (let retry = 0; retry <= MAX_5XX_RETRIES; retry++) {
     // Abort the request if the backend hangs past the timeout.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     try {
       const res = await fetch(`${BASE_URL}${path}`, {
-        // Never cached — read straight from the API on every request.
-        cache: 'no-store',
+        // Cached and tagged — invalidated by an admin save via
+        // /api/revalidate, or by the window as a backstop.
+        next: { revalidate: REVALIDATE_SECONDS, tags },
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
@@ -81,9 +154,9 @@ async function apiFetch<T>(path: string): Promise<T | null> {
       if (!res.ok) {
         // 404 is a normal "not found" — return null, don't log/retry.
         if (res.status === 404) return null;
-        // Retry once on transient 5xx, otherwise give up gracefully.
-        if (res.status >= 500 && attempt < MAX_ATTEMPTS) {
-          await delay(300 * attempt);
+        // 5xx is usually transient and fails fast, so a retry is cheap.
+        if (res.status >= 500 && retry < MAX_5XX_RETRIES) {
+          await delay(RETRY_BACKOFF_MS);
           continue;
         }
         console.error(`[api] ${path} → HTTP ${res.status}`);
@@ -95,11 +168,10 @@ async function apiFetch<T>(path: string): Promise<T | null> {
       return envelope.data;
     } catch (err) {
       clearTimeout(timer);
-      // Network failure or timeout (abort) — retry once, then give up.
-      if (attempt < MAX_ATTEMPTS) {
-        await delay(300 * attempt);
-        continue;
-      }
+      // Timeout (abort) or network failure. No retry — we have already spent
+      // the full timeout, and retrying would exceed the function budget.
+      // Returning null lets the page render its empty state; the stale
+      // cached copy keeps serving visitors in the meantime.
       console.warn(`[api] fetch failed for ${path}:`, (err as Error).message);
       return null;
     }
@@ -114,14 +186,14 @@ async function apiFetch<T>(path: string): Promise<T | null> {
  * Used for the Home page and any CMS-driven page.
  */
 export async function getPage(slug: string): Promise<Page | null> {
-  return apiFetch<Page>(`/api/pages/${slug}`);
+  return apiFetch<Page>(`/api/pages/${slug}`, [CACHE_TAGS.pages]);
 }
 
 /**
  * GET /api/pages — returns all published pages (for nav/sitemap).
  */
 export async function getPages(): Promise<Page[]> {
-  const result = await apiFetch<Page[]>('/api/pages');
+  const result = await apiFetch<Page[]>('/api/pages', [CACHE_TAGS.pages]);
   return result ?? [];
 }
 
@@ -131,7 +203,7 @@ export async function getPages(): Promise<Page[]> {
  * GET /api/projects — returns all published projects ordered by `order`.
  */
 export async function getProjects(): Promise<Project[]> {
-  const result = await apiFetch<Project[]>('/api/projects');
+  const result = await apiFetch<Project[]>('/api/projects', [CACHE_TAGS.projects]);
   return result ?? [];
 }
 
@@ -139,7 +211,7 @@ export async function getProjects(): Promise<Project[]> {
  * GET /api/projects/featured — returns only featured projects.
  */
 export async function getFeaturedProjects(): Promise<Project[]> {
-  const result = await apiFetch<Project[]>('/api/projects?featured=true');
+  const result = await apiFetch<Project[]>('/api/projects?featured=true', [CACHE_TAGS.projects]);
   return result ?? [];
 }
 
@@ -147,7 +219,7 @@ export async function getFeaturedProjects(): Promise<Project[]> {
  * GET /api/projects/:slug — returns a single project by slug.
  */
 export async function getProject(slug: string): Promise<Project | null> {
-  return apiFetch<Project>(`/api/projects/${slug}`);
+  return apiFetch<Project>(`/api/projects/${slug}`, [CACHE_TAGS.projects]);
 }
 
 // ── Blog ──────────────────────────────────────────────────────
@@ -156,7 +228,7 @@ export async function getProject(slug: string): Promise<Project | null> {
  * GET /api/blog — returns all published blog posts, newest first.
  */
 export async function getBlogPosts(): Promise<BlogPost[]> {
-  const result = await apiFetch<BlogPost[]>('/api/blog');
+  const result = await apiFetch<BlogPost[]>('/api/blog', [CACHE_TAGS.blog]);
   return result ?? [];
 }
 
@@ -164,7 +236,7 @@ export async function getBlogPosts(): Promise<BlogPost[]> {
  * GET /api/blog/:slug — returns a single blog post by slug.
  */
 export async function getBlogPost(slug: string): Promise<BlogPost | null> {
-  return apiFetch<BlogPost>(`/api/blog/${slug}`);
+  return apiFetch<BlogPost>(`/api/blog/${slug}`, [CACHE_TAGS.blog]);
 }
 
 // ── Skills ────────────────────────────────────────────────────
@@ -175,35 +247,35 @@ export async function getBlogPost(slug: string): Promise<BlogPost | null> {
  * Returns [] when the API is unreachable; callers should apply a local fallback.
  */
 export async function getSkillsGrouped(): Promise<SkillGroupSection[]> {
-  const result = await apiFetch<SkillGroupSection[]>('/api/skills/grouped');
+  const result = await apiFetch<SkillGroupSection[]>('/api/skills/grouped', [CACHE_TAGS.skills]);
   return result ?? [];
 }
 
 // ── Experience ────────────────────────────────────────────────
 
 export async function getExperience(): Promise<Experience[]> {
-  const result = await apiFetch<Experience[]>('/api/experience');
+  const result = await apiFetch<Experience[]>('/api/experience', [CACHE_TAGS.experience]);
   return result ?? [];
 }
 
 // ── Education ──────────────────────────────────────────────────
 
 export async function getEducation(): Promise<Education[]> {
-  const result = await apiFetch<Education[]>('/api/education');
+  const result = await apiFetch<Education[]>('/api/education', [CACHE_TAGS.education]);
   return result ?? [];
 }
 
 // ── Achievements ──────────────────────────────────────────────
 
 export async function getAchievements(): Promise<Achievement[]> {
-  const result = await apiFetch<Achievement[]>('/api/achievements');
+  const result = await apiFetch<Achievement[]>('/api/achievements', [CACHE_TAGS.achievements]);
   return result ?? [];
 }
 
 // ── Site Settings ─────────────────────────────────────────────
 
 export async function getSiteSettings(): Promise<SiteSettings | null> {
-  return apiFetch<SiteSettings>('/api/settings');
+  return apiFetch<SiteSettings>('/api/settings', [CACHE_TAGS.settings]);
 }
 
 // ── Nav ───────────────────────────────────────────────────────
@@ -215,7 +287,7 @@ export async function getSiteSettings(): Promise<SiteSettings | null> {
  * static set.
  */
 export async function getNav(): Promise<NavPage[]> {
-  const result = await apiFetch<NavPage[]>('/api/pages/nav');
+  const result = await apiFetch<NavPage[]>('/api/pages/nav', [CACHE_TAGS.pages]);
   return result ?? [];
 }
 

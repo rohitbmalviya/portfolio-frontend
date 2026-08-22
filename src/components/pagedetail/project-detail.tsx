@@ -16,10 +16,16 @@ import rehypeHighlight from 'rehype-highlight';
 import { ExternalLink, ArrowLeft } from 'lucide-react';
 import { Tag } from '@/components/ui/tag';
 import { LinkButton } from '@/components/ui/button';
+import { resolveBackLink } from '@/lib/collection-links';
 import type { Project } from '@/lib/types';
 
-export function ProjectDetail({ project }: { project: Project }) {
+export async function ProjectDetail({ project }: { project: Project }) {
   const hasScreenshot = project.screenshots && project.screenshots.length > 0;
+
+  // Resolved from the CMS rather than hardcoded to "/projects": if that page
+  // is renamed or unpublished this falls back to home instead of 404-ing,
+  // and the label follows the page's own name.
+  const back = await resolveBackLink('projects');
 
   return (
     <div className="py-12">
@@ -27,11 +33,11 @@ export function ProjectDetail({ project }: { project: Project }) {
       <div className="wrap">
         {/* Back */}
         <Link
-          href="/projects"
+          href={back.href}
           className="inline-flex items-center gap-2 font-mono text-[13px] text-[--muted] hover:text-[--accent] transition-colors duration-150 mb-10"
         >
           <ArrowLeft size={14} aria-hidden="true" />
-          Back to projects
+          {back.label}
         </Link>
 
         {/* ── HERO ─────────────────────────────────────────── */}

@@ -11,11 +11,23 @@ import { LinkButton } from '@/components/ui/button';
 import { Nav } from '@/components/layout/nav';
 import { Footer } from '@/components/layout/footer';
 import { getNav, getSiteSettings } from '@/lib/api';
+import { navLinksFromPages } from '@/lib/nav-links';
 import { resolveSiteName, siteNameToLogoWords } from '@/lib/site';
+
+/** How many CMS shortcuts to offer alongside Home. */
+const MAX_SHORTCUTS = 3;
 
 export default async function NotFound() {
   const [navItems, settings] = await Promise.all([getNav(), getSiteSettings()]);
   const logoText = siteNameToLogoWords(resolveSiteName(settings?.name)).join('.');
+
+  // Shortcuts come from the nav rather than being hardcoded to Projects/Blog.
+  // Those are admin-owned CMS pages — hardcoding them meant a 404 page that
+  // could itself link to a 404 if either was renamed or unpublished. Home is
+  // rendered separately below since it is a fixed route, not a CMS slug.
+  const shortcuts = navLinksFromPages(navItems)
+    .filter((l) => l.href !== '/')
+    .slice(0, MAX_SHORTCUTS);
 
   return (
     <>
@@ -46,12 +58,11 @@ export default async function NotFound() {
             <LinkButton href="/" variant="primary">
               ← Home
             </LinkButton>
-            <LinkButton href="/projects" variant="ghost">
-              Projects
-            </LinkButton>
-            <LinkButton href="/blog" variant="ghost">
-              Blog
-            </LinkButton>
+            {shortcuts.map((link) => (
+              <LinkButton key={link.href} href={link.href} variant="ghost">
+                <span className="capitalize">{link.label}</span>
+              </LinkButton>
+            ))}
           </div>
 
           {/* Decorative mono line */}

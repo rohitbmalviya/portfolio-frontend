@@ -16,9 +16,10 @@ import { Calendar, Clock, ArrowLeft } from 'lucide-react';
 import { Tag } from '@/components/ui/tag';
 import { ScreenshotLightbox, LightboxTrigger, LightboxImg } from '@/components/projects/screenshot-lightbox';
 import { formatBlogDate, readingTimeLabel } from '@/lib/utils';
+import { resolveBackLink } from '@/lib/collection-links';
 import type { BlogPost } from '@/lib/types';
 
-export function BlogDetail({ post }: { post: BlogPost }) {
+export async function BlogDetail({ post }: { post: BlogPost }) {
   // All zoomable images on this post: cover first, then markdown body images.
   const bodyImageUrls = post.body
     ? [...post.body.matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)].map((m) => m[1])
@@ -28,16 +29,21 @@ export function BlogDetail({ post }: { post: BlogPost }) {
     ...bodyImageUrls.map((url) => ({ url, alt: '' })),
   ];
 
+  // Resolved from the CMS rather than hardcoded to "/blog": if that page is
+  // renamed or unpublished this falls back to home instead of 404-ing, and
+  // the label follows the page's own name.
+  const back = await resolveBackLink('blog');
+
   return (
     <div className="py-12">
       <div className="wrap">
         {/* Back */}
         <Link
-          href="/blog"
+          href={back.href}
           className="inline-flex items-center gap-2 font-mono text-[13px] text-[--muted] hover:text-[--accent] transition-colors duration-150 mb-10"
         >
           <ArrowLeft size={14} aria-hidden="true" />
-          Back to blog
+          {back.label}
         </Link>
 
         <ScreenshotLightbox screenshots={lightboxImages}>

@@ -183,6 +183,61 @@ interface ApiEnvelope<T> {
   data: T;
 }
 
+// ── Public-cache invalidation ─────────────────────────────────
+//
+// Public pages are ISR-cached with a long window (lib/api.ts), so an admin
+// edit would otherwise not appear until that window expired. After every
+// successful mutation we POST /api/revalidate, which drops the affected tags
+// and makes the edit live on the next request.
+//
+// This is wired into adminFetch/adminUpload rather than into each admin page
+// on purpose: there is no way to add a new mutation and forget to invalidate.
+
+/** Path prefix → tags to drop. Anything unlisted invalidates everything. */
+const REVALIDATE_TAGS: Array<[prefix: string, tags: string[]]> = [
+  // Collections also carry `pages`, because a page's sections render these
+  // records inline — editing a project changes any page showing a project grid.
+  ['/projects', ['projects', 'pages']],
+  ['/blog', ['blog', 'pages']],
+  ['/skills', ['skills', 'pages']],
+  ['/experience', ['experience', 'pages']],
+  ['/education', ['education', 'pages']],
+  ['/achievements', ['achievements', 'pages']],
+  ['/settings', ['settings', 'pages']],
+  ['/sections', ['pages']],
+  ['/pages', ['pages']],
+];
+
+/** Mutations that change nothing a visitor can see — skip the round-trip. */
+const NO_REVALIDATE_PATHS = ['/auth', '/contact', '/stats'];
+
+function tagsForPath(path: string): string[] | undefined {
+  const match = REVALIDATE_TAGS.find(([prefix]) => path.startsWith(prefix));
+  // undefined → the endpoint sends every tag. Media and config land here:
+  // an uploaded image or a changed option list can surface almost anywhere,
+  // and over-invalidating costs one re-render while under-invalidating
+  // silently serves stale content.
+  return match?.[1];
+}
+
+function revalidatePublicCache(path: string, method: string): void {
+  if (method === 'GET') return;
+  if (NO_REVALIDATE_PATHS.some((p) => path.startsWith(p))) return;
+
+  const tags = tagsForPath(path);
+
+  // Fire-and-forget: the admin's save should not wait on, or fail because of,
+  // cache housekeeping. If this call is lost the ISR window still catches up.
+  void fetch('/api/revalidate', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tags ? { tags } : {}),
+  }).catch(() => {
+    /* non-fatal — the time-based window is the backstop */
+  });
+}
+
 /** Paths that must never trigger (or be retried by) the refresh flow. */
 const NO_REFRESH_PATHS = ['/auth/refresh', '/auth/login', '/auth/logout'];
 
@@ -258,6 +313,9 @@ async function adminFetch<T>(
     throw new Error(await parseErrorMessage(res));
   }
 
+  // Succeeded — if this changed content, drop the matching public cache tags.
+  revalidatePublicCache(path, (options.method ?? 'GET').toUpperCase());
+
   // 204 No Content — no body to parse
   if (res.status === 204) return undefined as T;
 
@@ -292,6 +350,9 @@ async function adminUpload<T>(path: string, formData: FormData): Promise<T> {
   if (!res.ok) {
     throw new Error(await parseErrorMessage(res));
   }
+
+  // A new upload can appear on any public page — invalidate before returning.
+  revalidatePublicCache(path, 'POST');
 
   // Unwrap { data: T } envelope
   const envelope = (await res.json()) as ApiEnvelope<T>;

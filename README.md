@@ -67,7 +67,7 @@ src/
 Fetches `GET /api/pages/home` and renders its ordered, enabled sections through `SectionRenderer`. The CMS is the sole source of truth — there is no static inline fallback.
 
 **`/:slug` (CMS pages)**
-Handles any page created in the admin (e.g., `/contact`, `/about`, `/uses`). Every page is server-rendered on demand — nothing is prerendered, so a page created or edited in the admin is live on the next request. Metadata (`metaTitle`, `metaDescription`, `ogImage`) is sourced from the CMS page record.
+Handles any page created in the admin (e.g., `/contact`, `/about`, `/uses`). Rendered on demand and then ISR-cached; an admin save invalidates the `pages` tag, so an edit is live on the next request. Metadata (`metaTitle`, `metaDescription`, `ogImage`) is sourced from the CMS page record.
 
 **`/:slug/:item` (Unified detail route)**
 A single route handles detail pages for every collection. `[slug]` is the collection name; `[item]` is the item slug or id:
@@ -80,7 +80,7 @@ A single route handles detail pages for every collection. `[slug]` is the collec
 | `/education/:id` | Education | `EducationDetail` |
 | `/achievements/:id` | Achievements | `AchievementDetail` |
 
-Every item is fetched from the API and server-rendered on request. Per-item Open Graph metadata is generated dynamically via `generateMetadata`.
+Every item is fetched from the API, rendered on demand and ISR-cached, with admin saves invalidating the relevant tag. Per-item Open Graph metadata is generated dynamically via `generateMetadata`.
 
 ### SectionRenderer
 
@@ -116,7 +116,7 @@ The `/admin` area is a full headless CMS bundled into the same Next.js app. It i
 
 ### Admin auth & the `/backend-api` proxy
 
-In production the frontend (Vercel) and backend (Render) live on different origins, and browsers routinely block third-party cookies (Safari, Chrome tracking-protection, etc.). To keep auth cookie-based without falling back to client-side token storage, all admin API calls (`lib/admin-api.ts`) go through a same-origin rewrite instead of hitting the backend directly:
+In production the frontend (Vercel) and backend (Google Cloud Run) live on different origins, and browsers routinely block third-party cookies (Safari, Chrome tracking-protection, etc.). To keep auth cookie-based without falling back to client-side token storage, all admin API calls (`lib/admin-api.ts`) go through a same-origin rewrite instead of hitting the backend directly:
 
 ```
 /backend-api/:path*  →  ${NEXT_PUBLIC_API_URL}/api/:path*   (next.config.ts → rewrites())
@@ -126,7 +126,7 @@ Because Next.js rewrites proxy the request server-side, the backend's `Set-Cooki
 
 - On a `401`, `adminFetch`/`adminUpload` transparently POST `/backend-api/auth/refresh` once (cookie-based) and retry the original call; concurrent 401s share a single in-flight refresh so there's no request stampede. If refresh fails, the user is redirected to `/admin/login`.
 - `src/middleware.ts` gates `/admin/*` (except `/admin/login`) on the mere *presence* of the `access_token` cookie, redirecting to `/admin/login` if it's missing. This is a cheap presence check, not JWT verification — the client-side `AdminAuthGuard` (calls `GET /api/auth/me`) and the backend's own JWT validation remain the real enforcement.
-- Public reads (`lib/api.ts`) are uncached server-side fetches straight to `NEXT_PUBLIC_API_URL` and need no cookies, so they bypass the proxy entirely.
+- Public reads (`lib/api.ts`) are ISR-cached server-side fetches straight to `NEXT_PUBLIC_API_URL` and need no cookies, so they bypass the proxy entirely.
 
 ### Admin Sidebar Navigation
 
@@ -173,7 +173,7 @@ src/
 │   ├── layout/                # Navbar, Footer, ParticlesBackground
 │   └── ui/                    # Shared primitives: Button, Tag, SkillIcon, ThemeToggle, ThemeProvider, SectionHeading, SectionCta, ErrorState
 └── lib/
-    ├── api.ts                 # Typed uncached fetch client for all public API reads (server-side, direct to backend)
+    ├── api.ts                 # Typed ISR fetch client + cache tags for all public API reads (server-side, direct to backend)
     ├── admin-api.ts           # Authenticated admin API client — same-origin via /backend-api proxy, cookie-only auth
     ├── types.ts               # TypeScript mirror of the backend Prisma schema
     ├── seo.ts                 # buildPageMetadata — shared CMS-driven metadata builder
@@ -263,11 +263,22 @@ X-XSS-Protection: 1; mode=block
 Referrer-Policy: strict-origin-when-cross-origin
 ```
 
-### Caching
+### Caching — ISR with on-demand invalidation
 
-There is none, by design. Every public data fetch in `lib/api.ts` uses `cache: 'no-store'`, and every public route is marked `export const dynamic = 'force-dynamic'`, so each request server-renders against live API data. A CMS edit shows up on the very next page load — there is no revalidation window and no build-time prerendering to invalidate.
+Public reads are cached and **tagged** (`CACHE_TAGS` in `lib/api.ts`). Two things invalidate them:
 
-The tradeoff is that every visit costs one API round-trip per data dependency (the public layout alone fetches nav + settings, and each section component fetches its own collection). `lib/api.ts` softens this with an 8-second timeout and a single retry, and when the backend is unreachable it returns `null` or an empty array — pages still render with empty states rather than throwing.
+1. **An admin save.** `adminFetch`/`adminUpload` POST `/api/revalidate` after any successful mutation, which calls `revalidateTag` for the affected content. An edit is therefore live on the very next request — there is no window to wait out. This is wired into the API client rather than into individual admin pages, so a new mutation cannot forget to invalidate.
+2. **A 10-minute window**, as a backstop for the rare case where that call is lost.
+
+Why this matters beyond freshness: the backend runs on **Cloud Run with `min-instances=0`** and the database is **Neon, which autosuspends**. A measured cold start — container boot, Prisma `$connect()`, Neon wake — took **16.9 seconds**. Serving a cached render means visitors never wait on that; ISR is stale-while-revalidate, so the page is returned immediately and the origin wakes in the background.
+
+`/api/revalidate` authenticates by forwarding the caller's cookies to the backend's `/auth/me`. There is no shared secret, because the admin is client-rendered and any secret would have to reach the browser.
+
+**Timeouts.** `lib/api.ts` allows 20s per request. The previous 8s × 2 attempts gave a 16.3s budget, which was *just* under that 16.9s cold start — so both attempts aborted and pages rendered empty. Retries now apply to fast 5xx failures only, never to timeouts: retrying after a 20s abort would double the budget and exceed Vercel's function limit for no gain. Public routes set `maxDuration = 30` to leave headroom on a cache miss.
+
+When the backend is unreachable, `lib/api.ts` still returns `null` or an empty array — pages render empty states rather than throwing, and the previously cached copy keeps serving visitors meanwhile.
+
+Browser-originated calls (`getConfigOptions`, `submitContact`) stay uncached — they're client mutations and dropdown reads, not page renders.
 
 ### Theme
 
